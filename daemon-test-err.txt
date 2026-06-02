@@ -1,0 +1,67 @@
+warning: fields `config`, `policy_kernel`, `executor`, and `agent_runtime` are never read
+  --> crates\agenticos-daemon\src\bootstrap.rs:17:9
+   |
+16 | pub struct DaemonContext {
+   |            ------------- fields in this struct
+17 |     pub config: DaemonConfig,
+   |         ^^^^^^
+...
+21 |     pub policy_kernel: Arc<DefaultPolicyKernel>,
+   |         ^^^^^^^^^^^^^
+22 |     pub executor: Box<dyn ApprovedActionExecutor>,
+   |         ^^^^^^^^
+23 |     pub agent_runtime: InMemoryAgentRuntime,
+   |         ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `safety` is never read
+ --> crates\agenticos-daemon\src\config.rs:7:9
+  |
+4 | pub struct DaemonConfig {
+  |            ------------ field in this struct
+...
+7 |     pub safety: SafetyConfig,
+  |         ^^^^^^
+  |
+  = note: `DaemonConfig` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: field `policy` is never read
+  --> crates\agenticos-daemon\src\config.rs:15:9
+   |
+11 | pub struct AgenticosConfig {
+   |            --------------- field in this struct
+...
+15 |     pub policy: String,
+   |         ^^^^^^
+   |
+   = note: `AgenticosConfig` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `privileged_execution` and `llm_enabled` are never read
+  --> crates\agenticos-daemon\src\config.rs:21:9
+   |
+19 | pub struct SafetyConfig {
+   |            ------------ fields in this struct
+20 |     #[serde(default = "default_privileged")]
+21 |     pub privileged_execution: bool,
+   |         ^^^^^^^^^^^^^^^^^^^^
+22 |     #[serde(default = "default_llm")]
+23 |     pub llm_enabled: bool,
+   |         ^^^^^^^^^^^
+   |
+   = note: `SafetyConfig` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: method `policy_path` is never used
+  --> crates\agenticos-daemon\src\config.rs:58:12
+   |
+43 | impl DaemonConfig {
+   | ----------------- method in this implementation
+...
+58 |     pub fn policy_path(&self) -> &str {
+   |            ^^^^^^^^^^^
+
+warning: `agenticos-daemon` (bin "agenticos-daemon") generated 5 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.53s
+     Running `target\debug\agenticos-daemon.exe configs/dev.toml`
+failed to bootstrap daemon: application error: sqlite init: application error: failed to open sqlite db: unable to open database file: data/agenticos-dev.db
+error: process didn't exit successfully: `target\debug\agenticos-daemon.exe configs/dev.toml` (exit code: 1)

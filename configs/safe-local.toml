@@ -1,0 +1,9 @@
+[agenticos]
+mode = "safe-local"
+event_store = "sqlite"
+db_path = "data/agenticos-safe.db"
+policy = "policies/default.toml"
+
+[safety]
+privileged_execution = false
+llm_enabled = false

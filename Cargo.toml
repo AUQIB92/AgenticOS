@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/agenticos-domain",
+  "crates/agenticos-application",
+  "crates/agenticos-bus",
+  "crates/agenticos-policy",
+  "crates/agenticos-runtime",
+  "crates/agenticos-agents",
+  "crates/agenticos-observe",
+  "crates/agenticos-executor",
+  "crates/agenticos-daemon",
+  "crates/agenticos-cli",
+  "crates/agenticos-dashboard",
+  "crates/agenticos-safety",
+]

@@ -1,0 +1,11 @@
+[package]
+name = "agenticos-policy"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.98"
+
+[dependencies]
+agenticos-application = { path = "../agenticos-application" }
+agenticos-domain = { path = "../agenticos-domain" }
+serde = { version = "1", features = ["derive"] }

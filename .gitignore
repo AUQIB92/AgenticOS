@@ -1,0 +1,8 @@
+/target/
+**/*.rs.bk
+.env
+.env.*
+*.log
+experiments/raw/
+experiments/processed/
+experiments/reports/

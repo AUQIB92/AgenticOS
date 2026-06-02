@@ -1,0 +1,5 @@
+[agenticos]
+mode = "development"
+event_store = "sqlite"
+db_path = "data/agenticos-dev.db"
+policy = "policies/default.toml"

@@ -1,0 +1,7 @@
+[policy]
+name = "default"
+description = "Default scaffold policy. No privileged actions are enabled."
+
+[policy.defaults]
+allow_privileged_actions = false
+require_approval_for_high_risk_actions = true
