@@ -1,0 +1,150 @@
+﻿cargo :     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.33s
+At line:1 char:48
++ ... riments/alpha4/results; $output = cargo run --bin alpha4 2>&1; $outpu ...
++                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Finished `d...get(s) in 0.33s:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+     Running `target\debug\alpha4.exe`
+AgenticOS Alpha-4 Governance Validation
+=======================================
+Demonstrating all three incident-response modes:
+  A: Warning  ÔåÆ Execute (no vetoes)
+  B: Error    ÔåÆ SelectiveVeto (partial veto)
+  C: Critical ÔåÆ GlobalFreeze (all vetoed)
+
+Includes proposal-type breakdown and execution breakdown
+to diagnose selective-veto saturation.
+
+
+========================================================================
+  Scenario A: Warning ÔåÆ Execute
+========================================================================
+  Scenario:             A-warning-execute
+  Ticks:                5
+  Iterations:           5
+  Replay consistent:    true
+
+  Total proposals:      5
+    Resource-modifying: 0
+    Advisory:           5
+  Total incidents:      5
+  Total vetoes:         0
+    SelectiveVeto:      0
+    IncidentTriggered:  0
+  Total approved:       5
+  Total denied:         0
+  Total executions:     5
+
+  Proposal type breakdown:
+    WorkloadClassifyRecommend: 5
+  Execution breakdown:
+    WorkloadClassifyRecommend: 5
+  Veto reason breakdown: (none)
+
+  Resource-modifying ratio: 0.0%
+
+  Verification:
+    executions > 0:       true
+    vetoes = 0:           true
+    Ô£ô PASS: Warning incidents do not trigger vetoes
+
+========================================================================
+  Scenario B: Error ÔåÆ SelectiveVeto
+========================================================================
+  Scenario:             B-error-selective
+  Ticks:                5
+  Iterations:           5
+  Replay consistent:    true
+
+  Total proposals:      10
+    Resource-modifying: 5
+    Advisory:           5
+  Total incidents:      10
+  Total vetoes:         5
+    SelectiveVeto:      5
+    IncidentTriggered:  0
+  Total approved:       5
+  Total denied:         0
+  Total executions:     5
+
+  Proposal type breakdown:
+    WorkloadClassifyRecommend: 5
+    CgroupSetCpuMax: 5
+  Execution breakdown:
+    WorkloadClassifyRecommend: 5
+  Veto reason breakdown:
+    SelectiveVeto: 5
+
+  Resource-modifying ratio: 50.0%
+
+  Verification:
+    executions > 0:       true
+    selective_vetoes > 0: true
+    Ô£ô PASS: Error incidents trigger SelectiveVeto while preserving liveness
+
+========================================================================
+  Scenario C: Critical ÔåÆ GlobalFreeze
+========================================================================
+  Scenario:             C-critical-freeze
+  Ticks:                5
+  Iterations:           5
+  Replay consistent:    true
+
+  Total proposals:      15
+    Resource-modifying: 10
+    Advisory:           5
+  Total incidents:      26
+  Total vetoes:         15
+    SelectiveVeto:      0
+    IncidentTriggered:  15
+  Total approved:       0
+  Total denied:         0
+  Total executions:     0
+
+  Proposal type breakdown:
+    CgroupSetCpuMax: 5
+    CgroupSetCpuWeight: 5
+    WorkloadClassifyRecommend: 5
+  Execution breakdown: (none)
+  Veto reason breakdown:
+    IncidentTriggered: 15
+
+  Resource-modifying ratio: 66.7%
+
+  Verification:
+    proposals > 0:        true
+    veto Ôëê proposals:     100.0% (15/15)
+    executions = 0:       true
+    reason=IncidentTriggered: true
+    Ô£ô PASS: Critical incidents trigger global freeze
+
+========================================================================
+  Summary
+========================================================================
+
+  Mode           | Vetoes | Selective | Global | Executions |   RM-ratio | Liveness
+  ------------------------------------------------------------------------------
+  Warning        |      0 |         0 |      0 |          5 |         0% | Ô£à     
+  Error          |      5 |         5 |      0 |          5 |        50% | Ô£à     
+  Critical       |     15 |         0 |     15 |          0 |        67% | Ô£à     
+
+========================================================================
+  Selective-Veto Saturation Diagnostic
+========================================================================
+
+Root cause: when 100% of proposals are resource-modifying,
+SelectiveVeto vetoes everything, yielding executor_count = 0.
+
+This occurs when the environment does not produce the observation
+types needed for advisory proposals (e.g., CPU pressure for
+WorkloadClassifyRecommend).
+
+Proposal-type breakdowns above show the mix per scenario.
+If a real system shows 100% resource-modifying proposals,
+check:
+  1. Does /proc/pressure/cpu exist and return valid data?
+  2. Are non-resource-modifying agents (e.g., ObserveOnly) registered?
+  3. Is the workload generating the right observation types?
+
+Results saved to experiments/alpha4/results/alpha4-results.json

@@ -1,0 +1,6 @@
+scenario,iteration,tick,proposals,incidents,vetoes,arbitrations,escalations,approved,denied,policy_eval_ms,safety_eval_ms,total_ms
+S3-incident-driven,0,1,2,1,2,0,2,0,0,0.008100,0.035000,0.043600
+S3-incident-driven,0,2,2,1,2,0,2,0,0,0.005900,0.024400,0.030500
+S3-incident-driven,0,3,2,1,2,0,2,0,0,0.006300,0.024800,0.031300
+S3-incident-driven,0,4,2,1,2,0,2,0,0,0.006000,0.023600,0.029900
+S3-incident-driven,0,5,2,1,2,0,2,0,0,0.006000,0.027000,0.033200

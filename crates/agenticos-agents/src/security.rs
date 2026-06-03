@@ -14,6 +14,9 @@ pub struct SecurityAgent {
     prev_process_count: Mutex<usize>,
     /// Consecutive ticks with high process count.
     high_process_ticks: Mutex<u64>,
+    /// When Some(n), emits Critical-severity incident if process_count > n.
+    /// Default None — disabled for normal operation.
+    high_process_critical_threshold: Option<usize>,
 }
 
 impl SecurityAgent {
@@ -23,6 +26,20 @@ impl SecurityAgent {
             tick_count: Mutex::new(0),
             prev_process_count: Mutex::new(0),
             high_process_ticks: Mutex::new(0),
+            high_process_critical_threshold: None,
+        }
+    }
+
+    /// Create a SecurityAgent with a Critical-severity threshold.
+    /// When process count exceeds `threshold`, a Critical incident is emitted.
+    /// Use only for testing/experimentation.
+    pub fn with_critical_threshold(id: AgentId, threshold: usize) -> Self {
+        Self {
+            id,
+            tick_count: Mutex::new(0),
+            prev_process_count: Mutex::new(0),
+            high_process_ticks: Mutex::new(0),
+            high_process_critical_threshold: Some(threshold),
         }
     }
 
@@ -118,6 +135,50 @@ impl SecurityAgent {
 
     /// Detect anomalous agent behavior: spikes in CPU pressure combined with
     /// rapid process creation suggest a workload agent behaving unexpectedly.
+    /// Detect process count thresholds and emit incidents at appropriate severity.
+    ///
+    /// Always active:
+    ///   process_count > 20 → Error severity (triggers SelectiveVeto).
+    ///
+    /// Configurable (off by default):
+    ///   process_count > high_process_critical_threshold → Critical severity (triggers GlobalFreeze).
+    fn detect_process_count_incidents(&self, observations: &[Observation]) -> Vec<Incident> {
+        let process_count = count_processes(observations);
+        let mut incidents = Vec::new();
+
+        if process_count > 20 {
+            incidents.push(Incident::new(
+                IncidentCategory::Security,
+                IncidentSeverity::Error,
+                self.id.clone(),
+                None,
+                format!(
+                    "HighProcessCount: {} active processes (threshold: 20) \
+                     — selective veto of resource-modifying actions active",
+                    process_count
+                ),
+            ));
+        }
+
+        if let Some(threshold) = self.high_process_critical_threshold {
+            if process_count > threshold {
+                incidents.push(Incident::new(
+                    IncidentCategory::Security,
+                    IncidentSeverity::Critical,
+                    self.id.clone(),
+                    None,
+                    format!(
+                        "CriticalProcessCount: {} active processes (threshold: {threshold}) \
+                         — global freeze active, all actions vetoed",
+                        process_count
+                    ),
+                ));
+            }
+        }
+
+        incidents
+    }
+
     fn detect_agent_anomaly(
         &self,
         observations: &[Observation],
@@ -175,6 +236,7 @@ impl Agent for SecurityAgent {
 
         incidents.extend(Self::detect_fork_storm(observations));
         incidents.extend(self.detect_repeated_denial(observations, current_tick));
+        incidents.extend(self.detect_process_count_incidents(observations));
         incidents.extend(self.detect_agent_anomaly(observations, current_tick));
 
         incidents

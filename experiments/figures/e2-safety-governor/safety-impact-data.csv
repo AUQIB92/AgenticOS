@@ -1,0 +1,6 @@
+workload,agents_policy_vetoes,full_vetoes,agents_policy_approved,full_approved
+cpu-contention,0,0,50,50
+memory-pressure,0,0,50,50
+mixed,0,0,100,100
+process-explosion,0,0,0,0
+incident-storm,0,0,0,0

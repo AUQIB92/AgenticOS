@@ -1,0 +1,20 @@
+{
+  "scenario": "S4-escalation-chain",
+  "seed": 42,
+  "ticks": 5,
+  "iterations": 10,
+  "replay_consistent": true,
+  "total_proposals": 5,
+  "total_incidents": 8,
+  "total_vetoes": 5,
+  "total_arbitrations": 0,
+  "total_escalations": 5,
+  "total_approved": 0,
+  "total_denied": 0,
+  "mean_total_ms": 0.0321,
+  "mean_policy_eval_ms": 0.004116,
+  "mean_safety_eval_ms": 0.027740000000000004,
+  "veto_breakdown": {
+    "IncidentTriggered": 5
+  }
+}

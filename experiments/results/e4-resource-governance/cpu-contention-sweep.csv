@@ -1,0 +1,6 @@
+workload,seed,ticks,mean_total_ms,p50_total_ms,p95_total_ms,p99_total_ms,mean_collect_proposals_ms,mean_policy_eval_ms,mean_safety_eval_ms,mean_executor_ms,total_proposals,total_incidents,total_vetoes,total_approved,total_denied,total_executions
+cpu-contention,42,10,0.0189,0.0181,0.0302,0.0302,0.0038,0.0004,0.0026,0.0008,0,0,0,0,0,0
+cpu-contention,42,10,0.2797,0.1064,1.8396,1.8396,0.0206,0.0153,0.1462,0.0320,48,0,0,48,0,48
+cpu-contention,42,10,0.1125,0.1078,0.1305,0.1305,0.0225,0.0153,0.0214,0.0350,50,0,0,50,0,50
+cpu-contention,42,10,0.1232,0.1071,0.2473,0.2473,0.0203,0.0155,0.0211,0.0480,50,0,0,50,0,50
+cpu-contention,42,10,0.1114,0.1091,0.1282,0.1282,0.0205,0.0164,0.0209,0.0350,50,0,0,50,0,50

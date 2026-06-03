@@ -1,0 +1,19 @@
+### E2: Safety Governor Impact — Comparative Governance Report
+
+| Workload | Mode | Proposals | Incidents | Vetoes | Approved | Denied | Decisions | Escalation Rate |
+|----------|------|----------:|----------:|------:|--------:|------:|---------:|----------------:|
+| cpu-contention | policy-only | 0 | 0 | 0 | 0 | 0 | 0 | 0.0000 |
+| cpu-contention | agents+policy | 50 | 0 | 0 | 50 | 0 | 50 | 0.0000 |
+| cpu-contention | full | 50 | 0 | 0 | 50 | 0 | 50 | 0.0000 |
+| memory-pressure | policy-only | 0 | 0 | 0 | 0 | 0 | 0 | 0.0000 |
+| memory-pressure | full | 50 | 0 | 0 | 50 | 0 | 50 | 0.0000 |
+| memory-pressure | agents+policy | 50 | 0 | 0 | 50 | 0 | 50 | 0.0000 |
+| mixed | agents+policy | 100 | 0 | 0 | 100 | 0 | 100 | 0.0000 |
+| mixed | full | 100 | 0 | 0 | 100 | 0 | 100 | 0.0000 |
+| mixed | policy-only | 0 | 0 | 0 | 0 | 0 | 0 | 0.0000 |
+| process-explosion | agents+policy | 0 | 30 | 0 | 0 | 0 | 0 | 1.0000 |
+| process-explosion | policy-only | 0 | 0 | 0 | 0 | 0 | 0 | 0.0000 |
+| process-explosion | full | 0 | 30 | 0 | 0 | 0 | 0 | 1.0000 |
+| incident-storm | policy-only | 0 | 0 | 0 | 0 | 0 | 0 | 0.0000 |
+| incident-storm | agents+policy | 0 | 30 | 0 | 0 | 0 | 0 | 1.0000 |
+| incident-storm | full | 0 | 30 | 0 | 0 | 0 | 0 | 1.0000 |

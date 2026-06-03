@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use agenticos_domain::{CgroupObservation, CpuObservation, MemoryObservation, ProcessObservation};
 
 use crate::parsing::{
-    parse_meminfo_value, parse_pressure_avg10, parse_proc_stat, parse_vmrss_kb,
+    parse_meminfo_value, parse_pressure_avg10, parse_proc_stat,
 };
 use crate::traits::{CgroupCollector, CpuCollector, MemoryCollector, ProcessCollector};
 

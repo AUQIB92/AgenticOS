@@ -3,6 +3,7 @@ pub mod dummy;
 pub mod file;
 pub mod memory;
 pub mod process;
+pub mod recommendation_consumer;
 pub mod security;
 pub mod supervisor;
 
@@ -11,5 +12,6 @@ pub use dummy::*;
 pub use file::*;
 pub use memory::*;
 pub use process::*;
+pub use recommendation_consumer::*;
 pub use security::*;
 pub use supervisor::*;

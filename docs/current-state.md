@@ -56,6 +56,6 @@
 
 ## Build Status
 
-- Toolchain: `rustc 1.98.0-nightly`
+- Toolchain: `rustc 1.96.0-nightly`
 - Build: `cargo build` — compiles with warnings on skeleton code.
 - Test: `cargo test` — all existing tests pass.

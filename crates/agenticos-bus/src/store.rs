@@ -239,6 +239,48 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
     }
 
+    #[test]
+    fn sqlite_recommendation_round_trip() {
+        use agenticos_domain::{AgentId, Recommendation};
+
+        let dir = std::env::temp_dir();
+        let db_path = dir.join(format!("agenticos-rec-test-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+
+        let store = SqliteTraceStore::new(db_path.to_str().unwrap()).unwrap();
+        let trace_id = TraceId::from("recommendation-test");
+
+        let rec = Recommendation::new(
+            AgentId::from("cpu-agent"),
+            0.9,
+            "High CPU detected",
+            "CPU at 95% for 30s",
+        );
+
+        store
+            .append(EventEnvelope::new(
+                Topic::new("recommendations.cpu"),
+                trace_id.clone(),
+                EventPayload::Recommendation(rec.clone()),
+            ))
+            .unwrap();
+
+        let replayed = store.replay(trace_id).unwrap();
+        assert_eq!(replayed.len(), 1);
+
+        match &replayed[0].payload {
+            EventPayload::Recommendation(recovered) => {
+                assert_eq!(recovered.id, rec.id);
+                assert_eq!(recovered.summary, rec.summary);
+                assert_eq!(recovered.reasoning, rec.reasoning);
+                assert_eq!(recovered.confidence, rec.confidence);
+            }
+            _ => panic!("expected Recommendation payload"),
+        }
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
     fn assert_trace_message(event: &EventEnvelope, expected: &str) {
         match &event.payload {
             EventPayload::Trace(trace) => assert_eq!(trace.message, expected),

@@ -1,0 +1,6 @@
+scenario,iteration,tick,proposals,incidents,vetoes,arbitrations,escalations,approved,denied,policy_eval_ms,safety_eval_ms,total_ms
+S5-adversarial,0,1,7,1,13,3,7,0,0,0.021100,0.110600,0.132000
+S5-adversarial,0,2,7,1,13,3,7,0,0,0.019200,0.096900,0.116400
+S5-adversarial,0,3,7,1,13,3,7,0,0,0.019500,0.127200,0.147000
+S5-adversarial,0,4,7,1,13,3,7,0,0,0.018600,0.107600,0.126400
+S5-adversarial,0,5,7,1,13,3,7,0,0,0.020400,0.103400,0.124200

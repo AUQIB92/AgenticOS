@@ -1,0 +1,6 @@
+workload,passed,mismatches,total_approved,total_denied,total_incidents
+cpu-contention,true,0,50,0,0
+memory-pressure,true,0,50,0,0
+mixed,true,0,100,0,0
+process-explosion,true,0,0,0,30
+incident-storm,true,0,0,0,30

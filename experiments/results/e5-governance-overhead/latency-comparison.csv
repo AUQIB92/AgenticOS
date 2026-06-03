@@ -1,0 +1,6 @@
+workload,mean_policy_only_ms,mean_agents_policy_ms,mean_full_ms,policy_share,safety_share,executor_share,proposals_per_tick,incidents_per_tick
+cpu-contention,0.000410,0.095910,0.122050,0.1287,0.2048,0.2885,5.0000,0.0000
+memory-pressure,0.000280,0.078620,0.107500,0.1230,0.2511,0.2332,5.0000,0.0000
+mixed,0.000360,0.168460,0.215130,0.1185,0.1981,0.2512,10.0000,0.0000
+process-explosion,0.000480,0.158050,0.161050,0.0034,0.0247,0.0071,0.0000,3.0000
+incident-storm,0.000390,0.161850,0.164920,0.0036,0.0241,0.0079,0.0000,3.0000

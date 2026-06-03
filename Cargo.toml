@@ -13,4 +13,6 @@ members = [
   "crates/agenticos-cli",
   "crates/agenticos-dashboard",
   "crates/agenticos-safety",
+  "crates/agenticos-bench",
+  "crates/agenticos-intelligence",
 ]

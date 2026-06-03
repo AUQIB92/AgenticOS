@@ -1,0 +1,20 @@
+{
+  "scenario": "S2-budget-violation",
+  "seed": 42,
+  "ticks": 5,
+  "iterations": 10,
+  "replay_consistent": true,
+  "total_proposals": 20,
+  "total_incidents": 0,
+  "total_vetoes": 10,
+  "total_arbitrations": 0,
+  "total_escalations": 10,
+  "total_approved": 10,
+  "total_denied": 0,
+  "mean_total_ms": 0.051156,
+  "mean_policy_eval_ms": 0.010702,
+  "mean_safety_eval_ms": 0.040198,
+  "veto_breakdown": {
+    "ResourceLimitsExceeded": 10
+  }
+}

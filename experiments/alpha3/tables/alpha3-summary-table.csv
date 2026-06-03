@@ -1,0 +1,19 @@
+### Alpha-3: Adversarial Governance — Results Summary
+
+| Scenario | Ticks | Iterations | Proposals | Incidents | Vetoes | Arbitrations | Escalations | Approved | Denied | Replay | Total Lat (ms) | Policy (ms) | Safety (ms) |
+|----------|-----:|----------:|---------:|---------:|------:|------------:|-----------:|--------:|------:|:------:|---------------:|------------:|------------:|
+| S1-proposal-conflict | 5 | 10 | 15 | 0 | 10 | 10 | 0 | 5 | 0 | ✓ | 0.0689 | 0.0144 | 0.0536 |
+| S2-budget-violation | 5 | 10 | 20 | 0 | 10 | 0 | 10 | 10 | 0 | ✓ | 0.0577 | 0.0122 | 0.0452 |
+| S3-incident-driven | 5 | 10 | 10 | 5 | 10 | 0 | 10 | 0 | 0 | ✓ | 0.0337 | 0.0065 | 0.0270 |
+| S4-escalation-chain | 5 | 10 | 5 | 8 | 5 | 0 | 5 | 0 | 0 | ✓ | 0.0281 | 0.0043 | 0.0235 |
+| S5-adversarial | 5 | 10 | 35 | 5 | 65 | 15 | 35 | 0 | 0 | ✓ | 0.1292 | 0.0198 | 0.1091 |
+
+### Veto Reason Breakdown by Scenario
+
+| Scenario | InvalidProposal | ConflictingProposals | IncidentTriggered | ResourceLimitsExceeded | ActionNotPermitted |
+|----------|----------------:|--------------------:|------------------:|----------------------:|-------------------:|
+| S1-proposal-conflict | 0 | 10 | 0 | 0 | 0 |
+| S2-budget-violation | 0 | 0 | 0 | 10 | 0 |
+| S3-incident-driven | 0 | 0 | 10 | 0 | 0 |
+| S4-escalation-chain | 0 | 0 | 5 | 0 | 0 |
+| S5-adversarial | 0 | 15 | 35 | 15 | 0 |

@@ -1,0 +1,20 @@
+{
+  "scenario": "S1-proposal-conflict",
+  "seed": 42,
+  "ticks": 5,
+  "iterations": 10,
+  "replay_consistent": true,
+  "total_proposals": 15,
+  "total_incidents": 0,
+  "total_vetoes": 10,
+  "total_arbitrations": 10,
+  "total_escalations": 0,
+  "total_approved": 5,
+  "total_denied": 0,
+  "mean_total_ms": 0.045773999999999995,
+  "mean_policy_eval_ms": 0.009104,
+  "mean_safety_eval_ms": 0.03636400000000001,
+  "veto_breakdown": {
+    "ConflictingProposals": 10
+  }
+}

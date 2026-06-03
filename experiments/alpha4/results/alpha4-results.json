@@ -1,0 +1,76 @@
+[
+  {
+    "scenario": "A-warning-execute",
+    "ticks": 5,
+    "iterations": 5,
+    "replay_consistent": true,
+    "total_proposals": 5,
+    "total_incidents": 5,
+    "total_vetoes": 0,
+    "total_selective": 0,
+    "total_global": 0,
+    "total_approved": 5,
+    "total_denied": 0,
+    "total_executions": 5,
+    "veto_breakdown": {},
+    "proposal_type_breakdown": {
+      "WorkloadClassifyRecommend": 5
+    },
+    "execution_breakdown": {
+      "WorkloadClassifyRecommend": 5
+    },
+    "resource_modifying_count": 0,
+    "advisory_count": 5
+  },
+  {
+    "scenario": "B-error-selective",
+    "ticks": 5,
+    "iterations": 5,
+    "replay_consistent": true,
+    "total_proposals": 10,
+    "total_incidents": 10,
+    "total_vetoes": 5,
+    "total_selective": 5,
+    "total_global": 0,
+    "total_approved": 5,
+    "total_denied": 0,
+    "total_executions": 5,
+    "veto_breakdown": {
+      "SelectiveVeto": 5
+    },
+    "proposal_type_breakdown": {
+      "WorkloadClassifyRecommend": 5,
+      "CgroupSetCpuMax": 5
+    },
+    "execution_breakdown": {
+      "WorkloadClassifyRecommend": 5
+    },
+    "resource_modifying_count": 5,
+    "advisory_count": 5
+  },
+  {
+    "scenario": "C-critical-freeze",
+    "ticks": 5,
+    "iterations": 5,
+    "replay_consistent": true,
+    "total_proposals": 15,
+    "total_incidents": 26,
+    "total_vetoes": 15,
+    "total_selective": 0,
+    "total_global": 15,
+    "total_approved": 0,
+    "total_denied": 0,
+    "total_executions": 0,
+    "veto_breakdown": {
+      "IncidentTriggered": 15
+    },
+    "proposal_type_breakdown": {
+      "CgroupSetCpuMax": 5,
+      "CgroupSetCpuWeight": 5,
+      "WorkloadClassifyRecommend": 5
+    },
+    "execution_breakdown": {},
+    "resource_modifying_count": 10,
+    "advisory_count": 5
+  }
+]

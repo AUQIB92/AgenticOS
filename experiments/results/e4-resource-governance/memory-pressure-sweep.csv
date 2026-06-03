@@ -1,0 +1,6 @@
+workload,seed,ticks,mean_total_ms,p50_total_ms,p95_total_ms,p99_total_ms,mean_collect_proposals_ms,mean_policy_eval_ms,mean_safety_eval_ms,mean_executor_ms,total_proposals,total_incidents,total_vetoes,total_approved,total_denied,total_executions
+memory-pressure,42,10,0.0136,0.0113,0.0329,0.0329,0.0026,0.0003,0.0022,0.0006,0,0,0,0,0,0
+memory-pressure,42,10,0.0121,0.0115,0.0144,0.0144,0.0023,0.0003,0.0016,0.0005,0,0,0,0,0,0
+memory-pressure,42,10,0.0122,0.0117,0.0140,0.0140,0.0023,0.0002,0.0016,0.0005,0,0,0,0,0,0
+memory-pressure,42,10,0.0991,0.0937,0.1354,0.1354,0.0192,0.0121,0.0261,0.0255,50,0,0,50,0,50
+memory-pressure,42,10,0.1008,0.1034,0.1126,0.1126,0.0191,0.0126,0.0261,0.0272,50,0,0,50,0,50

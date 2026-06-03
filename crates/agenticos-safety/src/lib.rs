@@ -28,6 +28,12 @@ pub struct SafetyMetrics {
     pub veto_reason_breakdown: HashMap<String, u64>,
     pub safety_escalations: u64,
     pub policy_violation_attempts: u64,
+    /// Set to 1 if a Critical-severity security incident was present this tick.
+    pub freeze_ticks: u64,
+    /// Number of SelectiveVeto decisions issued this tick.
+    pub selective_vetoes: u64,
+    /// Number of IncidentTriggered vetoes issued this tick (critical freeze).
+    pub global_vetoes: u64,
 }
 
 pub struct SafetyOutput {

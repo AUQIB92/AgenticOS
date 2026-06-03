@@ -1,0 +1,6 @@
+workload,policy_only_ms,agents_policy_ms,full_ms
+cpu-contention,0.000410,0.095910,0.122050
+memory-pressure,0.000280,0.078620,0.107500
+mixed,0.000360,0.168460,0.215130
+process-explosion,0.000480,0.158050,0.161050
+incident-storm,0.000390,0.161850,0.164920

@@ -1,0 +1,13 @@
+{
+  "workload": "mixed",
+  "seed": 42,
+  "ticks": 10,
+  "iterations": 1000,
+  "passed": true,
+  "mismatches": [],
+  "total_approved": 100,
+  "total_denied": 0,
+  "total_vetoes": 0,
+  "total_incidents": 0,
+  "mean_latency_ms": 0.70071
+}

@@ -39,6 +39,15 @@ enum Command {
     Replay { trace_id: String },
     /// Run governance integrity checks
     Health,
+    /// Show live cgroup v2 state (cpu.weight, cpu.max, memory.max)
+    #[command(name = "cgroup-state")]
+    CgroupState {
+        /// Path to cgroup directory (default: /sys/fs/cgroup/agenticos)
+        #[arg(default_value = "/sys/fs/cgroup/agenticos")]
+        cgroup_path: String,
+    },
+    /// Show workload classification recommendations
+    Recommendations,
 }
 
 fn main() {
@@ -79,6 +88,8 @@ fn main() {
             eprintln!("  metrics     Show aggregated metrics");
             eprintln!("  replay      Reconstruct a trace by ID");
             eprintln!("  health      Run governance integrity checks");
+            eprintln!("  recommendations Show workload classification recommendations");
+            eprintln!("  cgroup-state Show live cgroup v2 state (cpu.weight, cpu.max, memory.max)");
             Ok(())
         }
         Some(Command::Status) => cmd_status(&conn),
@@ -89,6 +100,8 @@ fn main() {
         Some(Command::Metrics) => cmd_metrics(&conn),
         Some(Command::Replay { trace_id }) => cmd_replay(&conn, trace_id),
         Some(Command::Health) => cmd_health(&conn),
+        Some(Command::CgroupState { cgroup_path }) => cmd_cgroup_state(cgroup_path),
+        Some(Command::Recommendations) => cmd_recommendations(&conn),
     };
 
     if let Err(e) = result {
@@ -524,6 +537,43 @@ fn cmd_metrics(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
         )
         .unwrap_or(0);
 
+    // Approved / denied decision counts
+    let approved_count: u64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM traces WHERE topic LIKE 'decisions.%' AND payload_json LIKE '%\"Approved\":%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let denied_count: u64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM traces WHERE topic LIKE 'decisions.%' AND payload_json LIKE '%\"Denied\":%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    // Veto reason breakdown — group by topic suffix (e.g., vetoes.selective-veto)
+    let mut veto_breakdown: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT topic, COUNT(*) as cnt FROM traces WHERE topic LIKE 'vetoes.%' GROUP BY topic"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let topic: String = row.get(0)?;
+            let cnt: u64 = row.get(1)?;
+            Ok((topic, cnt))
+        })?;
+        for row in rows {
+            if let Ok((topic, cnt)) = row {
+                // Extract reason from "vetoes.{reason}"
+                let reason = topic.strip_prefix("vetoes.").unwrap_or(&topic).to_owned();
+                veto_breakdown.insert(reason, cnt);
+            }
+        }
+    }
+
     // Extract latest decision latency from metrics
     let decision_latency: String = conn
         .query_row(
@@ -545,13 +595,22 @@ fn cmd_metrics(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
         })
         .unwrap_or_else(|| "N/A".into());
 
-    let rows = vec![
+    let mut rows = vec![
         MetricsRow { metric: "proposal_count".into(), value: proposal_count.to_string() },
         MetricsRow { metric: "incident_count".into(), value: incident_count.to_string() },
         MetricsRow { metric: "veto_count".into(), value: veto_count.to_string() },
+        MetricsRow { metric: "approved_count".into(), value: approved_count.to_string() },
+        MetricsRow { metric: "denied_count".into(), value: denied_count.to_string() },
         MetricsRow { metric: "executor_count".into(), value: result_count.to_string() },
         MetricsRow { metric: "decision_latency".into(), value: decision_latency },
     ];
+
+    for (reason, cnt) in &veto_breakdown {
+        rows.push(MetricsRow {
+            metric: format!("veto_reason/{reason}"),
+            value: cnt.to_string(),
+        });
+    }
 
     print_output(&rows, &["METRIC", "VALUE"],
         |r| vec![r.metric.clone(), r.value.clone()],
@@ -879,6 +938,117 @@ fn extract_proposal_id_from_msg(msg: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Cgroup State
+// ---------------------------------------------------------------------------
+
+fn cmd_cgroup_state(cgroup_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    cmd_cgroup_state_impl(cgroup_path)
+}
+
+#[cfg(target_os = "linux")]
+fn cmd_cgroup_state_impl(cgroup_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let path = std::path::Path::new(cgroup_path);
+    if !path.exists() {
+        return Err(format!("cgroup path '{}' does not exist", cgroup_path).into());
+    }
+
+    let read_file = |name: &str| -> String {
+        let p = path.join(name);
+        std::fs::read_to_string(&p).unwrap_or_else(|_| "N/A".into()).trim().to_owned()
+    };
+
+    let cpu_weight = read_file("cpu.weight");
+    let cpu_max = read_file("cpu.max");
+    let memory_max = read_file("memory.max");
+    let procs = read_file("cgroup.procs");
+    let controllers = read_file("cgroup.controllers");
+
+    println!("Cgroup:           {}", cgroup_path);
+    println!("cpu.weight:       {}", cpu_weight);
+    println!("cpu.max:          {}", cpu_max);
+    println!("memory.max:       {}", memory_max);
+    println!("cgroup.procs:     {}", procs.lines().count());
+    println!("controllers:      {}", controllers);
+
+    let procs_line_count = procs.lines().count();
+    println!();
+    println!("Processes in cgroup: {} PIDs", procs_line_count);
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cmd_cgroup_state_impl(_cgroup_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("error: cgroup-state requires Linux (cgroup v2)");
+    Err("not supported on this platform".into())
+}
+
+// ---------------------------------------------------------------------------
+// Recommendations
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct RecommendationRow {
+    timestamp: String,
+    agent: String,
+    classification: String,
+    confidence: f64,
+    summary: String,
+}
+
+fn cmd_recommendations(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let mut stmt = conn.prepare(
+        "SELECT payload_json, timestamp FROM traces WHERE topic LIKE 'recommendations.%' ORDER BY id"
+    )?;
+
+    let rows: Vec<RecommendationRow> = stmt
+        .query_map([], |row| {
+            let payload_json: String = row.get(0)?;
+            let timestamp: String = row.get(1)?;
+            Ok((payload_json, timestamp))
+        })?
+        .filter_map(|r| r.ok())
+        .filter_map(|(payload_json, timestamp)| {
+            let v: serde_json::Value = serde_json::from_str(&payload_json).ok()?;
+            let rec = v.get("Recommendation")?;
+            let classification = rec
+                .get("summary")?
+                .as_str()?
+                .strip_prefix("Workload classified as ")
+                .unwrap_or("?")
+                .to_owned();
+            let confidence = rec.get("confidence")?.as_f64()?;
+            let summary = rec.get("summary")?.as_str()?.to_owned();
+            let agent = rec.get("source_agent")?.as_str()?.to_owned();
+            Some(RecommendationRow {
+                timestamp,
+                agent,
+                classification,
+                confidence,
+                summary,
+            })
+        })
+        .collect();
+
+    if rows.is_empty() {
+        println!("No recommendations found.");
+        return Ok(());
+    }
+
+    print_output(&rows, &["TIMESTAMP", "AGENT", "CLASSIFICATION", "CONFIDENCE", "SUMMARY"],
+        |r| vec![
+            r.timestamp.clone(),
+            r.agent.clone(),
+            r.classification.clone(),
+            format!("{:.2}", r.confidence),
+            r.summary.clone(),
+        ],
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -890,7 +1060,7 @@ mod tests {
         DecisionId, DecisionOutcome, DenialReason, EventEnvelope, EventPayload, Incident,
         IncidentCategory, IncidentSeverity, MetricCollection, MetricLabel, MetricSample,
         MetricValue, Observation, ObservationId, ObservationPayload, ObservationSource, Proposal,
-        ProposalId, Topic, TraceEvent, TraceId,
+        ProposalId, Recommendation, Topic, TraceEvent, TraceId,
     };
 
     fn create_test_db() -> Connection {
@@ -1032,6 +1202,22 @@ mod tests {
             trace_id,
             &format!("results.{agent}"),
             EventPayload::ActionResult(result),
+            timestamp,
+        );
+    }
+
+    fn insert_recommendation(conn: &Connection, trace_id: &str, agent: &str, summary: &str, confidence: f64, reasoning: &str, timestamp: &str) {
+        let rec = Recommendation::new(
+            AgentId::from(agent),
+            confidence,
+            summary,
+            reasoning,
+        );
+        insert_event(
+            conn,
+            trace_id,
+            &format!("recommendations.{agent}"),
+            EventPayload::Recommendation(rec),
             timestamp,
         );
     }
@@ -1195,6 +1381,23 @@ mod tests {
         insert_decision(&conn, "trace-replay-1", "memory-agent", DecisionOutcome::Approved, "ts3");
         insert_result(&conn, "trace-replay-1", "memory-agent", "ts4");
         assert!(cmd_replay(&conn, "trace-replay-1").is_ok());
+    }
+
+    // ---------------------------------------------------------------
+    // Recommendations
+    // ---------------------------------------------------------------
+    #[test]
+    fn test_recommendations_empty_db() {
+        let conn = create_test_db();
+        assert!(cmd_recommendations(&conn).is_ok());
+    }
+
+    #[test]
+    fn test_recommendations_with_data() {
+        let conn = create_test_db();
+        insert_recommendation(&conn, "trace-1", "classifier", "Workload classified as Database", 0.92, "High CPU with database processes", "ts1");
+        insert_recommendation(&conn, "trace-1", "classifier", "Workload classified as Build", 0.88, "Compiler processes detected", "ts2");
+        assert!(cmd_recommendations(&conn).is_ok());
     }
 
     // ---------------------------------------------------------------

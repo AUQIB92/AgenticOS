@@ -1,0 +1,67 @@
+[
+  {
+    "workload": "cpu-contention",
+    "mean_policy_only_ms": 0.00040999999999999994,
+    "mean_agents_policy_ms": 0.09591,
+    "mean_full_ms": 0.12204999999999999,
+    "policy_share": 0.12871773863170835,
+    "safety_share": 0.2047521507578861,
+    "executor_share": 0.2884883244571897,
+    "proposal_throughput": 5.0,
+    "incident_throughput": 0.0,
+    "total_proposals": 50,
+    "total_incidents": 0
+  },
+  {
+    "workload": "memory-pressure",
+    "mean_policy_only_ms": 0.00028000000000000003,
+    "mean_agents_policy_ms": 0.07862,
+    "mean_full_ms": 0.1075,
+    "policy_share": 0.12297674418604652,
+    "safety_share": 0.25106976744186044,
+    "executor_share": 0.23320930232558137,
+    "proposal_throughput": 5.0,
+    "incident_throughput": 0.0,
+    "total_proposals": 50,
+    "total_incidents": 0
+  },
+  {
+    "workload": "mixed",
+    "mean_policy_only_ms": 0.0003599999999999999,
+    "mean_agents_policy_ms": 0.16846,
+    "mean_full_ms": 0.21513,
+    "policy_share": 0.11848649653697765,
+    "safety_share": 0.19806628550178965,
+    "executor_share": 0.25115046715939204,
+    "proposal_throughput": 10.0,
+    "incident_throughput": 0.0,
+    "total_proposals": 100,
+    "total_incidents": 0
+  },
+  {
+    "workload": "process-explosion",
+    "mean_policy_only_ms": 0.00047999999999999996,
+    "mean_agents_policy_ms": 0.15804999999999997,
+    "mean_full_ms": 0.16104999999999997,
+    "policy_share": 0.0033529959639863396,
+    "safety_share": 0.02465072958708476,
+    "executor_share": 0.007140639552933874,
+    "proposal_throughput": 0.0,
+    "incident_throughput": 3.0,
+    "total_proposals": 0,
+    "total_incidents": 30
+  },
+  {
+    "workload": "incident-storm",
+    "mean_policy_only_ms": 0.00039,
+    "mean_agents_policy_ms": 0.16185,
+    "mean_full_ms": 0.16491999999999998,
+    "policy_share": 0.0035774921173902497,
+    "safety_share": 0.02413291292747999,
+    "executor_share": 0.00794324520979869,
+    "proposal_throughput": 0.0,
+    "incident_throughput": 3.0,
+    "total_proposals": 0,
+    "total_incidents": 30
+  }
+]

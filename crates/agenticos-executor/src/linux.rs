@@ -88,6 +88,16 @@ impl LinuxCgroupExecutor {
         }))
     }
 
+    fn do_set_cpu_weight(&self, group: &str, weight: u64) -> Result<Option<CgroupSnapshot>, String> {
+        let prev = self.read_cgroup_file(group, "cpu.weight");
+        self.write_cgroup_file(group, "cpu.weight", &weight.to_string())?;
+        Ok(Some(CgroupSnapshot {
+            action: "set_cpu_weight".into(),
+            group: group.into(),
+            previous_value: prev,
+        }))
+    }
+
     // -----------------------------------------------------------------------
     // A3.2  — move_pid
     // -----------------------------------------------------------------------
@@ -200,6 +210,13 @@ impl LinuxCgroupExecutor {
                 let snap = self.do_terminate(group)?;
                 Ok((ActionStatus::Succeeded, format!("group '{}' terminated", group), snap))
             }
+            ActionKind::CgroupSetCpuWeight { group, weight } => {
+                let snap = self.do_set_cpu_weight(group, *weight)?;
+                Ok((ActionStatus::Succeeded, format!("cpu.weight set to {}", weight), snap))
+            }
+            ActionKind::WorkloadClassifyRecommend { classification, .. } => {
+                Ok((ActionStatus::Succeeded, format!("classification: {}", classification), None))
+            }
         }
     }
 }
@@ -284,7 +301,7 @@ impl RollbackManager for CgroupRollbackManager {
             "move_pid" => {
                 // previous_value stores the original cgroup path of the PID
                 if let Some(origin) = &snapshot.previous_value {
-                    let path = self.cgroup_root.join(&snapshot.group).join("cgroup.procs");
+                    let _path = self.cgroup_root.join(&snapshot.group).join("cgroup.procs");
                     // Read the PID we previously moved; not stored in snapshot, so log only
                     Err(format!("rollback of move_pid requires PID tracking (origin cgroup: {})", origin))
                 } else {

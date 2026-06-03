@@ -68,8 +68,7 @@ impl DaemonContext {
             {
                 if mode == "benchmark" || mode == "development" {
                     Box::new(
-                        LinuxCgroupExecutor::new("/sys/fs/cgroup".into())
-                            .map_err(|e| AppError::Message(format!("executor init: {e}")))?,
+                        LinuxCgroupExecutor::new("/sys/fs/cgroup".into()),
                     )
                 } else {
                     Box::new(DryRunExecutor::new())

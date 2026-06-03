@@ -1,0 +1,11 @@
+workload,pressure,proposal_rate,approval_rate,mean_latency_ms
+cpu-contention,0.3,0.0000,0.0000,0.0189
+cpu-contention,0.5,4.8000,1.0000,0.2797
+cpu-contention,0.7,5.0000,1.0000,0.1125
+cpu-contention,0.85,5.0000,1.0000,0.1232
+cpu-contention,0.95,5.0000,1.0000,0.1114
+memory-pressure,0.3,0.0000,0.0000,0.0136
+memory-pressure,0.5,0.0000,0.0000,0.0121
+memory-pressure,0.7,0.0000,0.0000,0.0122
+memory-pressure,0.85,5.0000,1.0000,0.0991
+memory-pressure,0.95,5.0000,1.0000,0.1008

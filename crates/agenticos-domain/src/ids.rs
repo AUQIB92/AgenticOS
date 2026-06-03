@@ -49,4 +49,5 @@ id_type!(IncidentId);
 id_type!(MessageId);
 id_type!(ObservationId);
 id_type!(ProposalId);
+id_type!(RecommendationId);
 id_type!(TraceId);

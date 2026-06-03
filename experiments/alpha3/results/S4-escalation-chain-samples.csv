@@ -1,0 +1,6 @@
+scenario,iteration,tick,proposals,incidents,vetoes,arbitrations,escalations,approved,denied,policy_eval_ms,safety_eval_ms,total_ms
+S4-escalation-chain,0,1,1,1,1,0,1,0,0,0.006800,0.047400,0.054500
+S4-escalation-chain,0,2,1,2,1,0,1,0,0,0.004100,0.018300,0.022600
+S4-escalation-chain,0,3,1,3,1,0,1,0,0,0.003500,0.018800,0.022600
+S4-escalation-chain,0,4,1,1,1,0,1,0,0,0.003600,0.016700,0.020500
+S4-escalation-chain,0,5,1,1,1,0,1,0,0,0.003600,0.016300,0.020100

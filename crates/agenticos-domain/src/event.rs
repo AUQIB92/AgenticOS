@@ -2,7 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     ActionRequest, ActionResult, AgentId, Decision, IncidentId, MessageId, Observation,
-    ObservationId, Proposal, TraceId,
+    ObservationId, Proposal, Recommendation, TraceId,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -66,6 +66,7 @@ pub enum EventPayload {
     ActionRequest(ActionRequest),
     ActionResult(ActionResult),
     Incident(Incident),
+    Recommendation(Recommendation),
     Trace(TraceEvent),
 }
 

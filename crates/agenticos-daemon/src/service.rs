@@ -3,9 +3,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use agenticos_application::AppError;
 use agenticos_domain::{
-    AgentId, DecisionOutcome, EventEnvelope, EventPayload, Incident, IncidentCategory,
-    IncidentSeverity, MetricCollection, MetricLabel, MetricSample, MetricValue, ObservationSource,
-    TraceId,
+    ActionKind, ActionStatus, AgentId, DecisionOutcome, EventEnvelope, EventPayload, Incident,
+    IncidentCategory, IncidentSeverity, MetricCollection, MetricLabel, MetricSample, MetricValue,
+    ObservationSource, TraceId,
 };
 use agenticos_policy::DeterministicPolicyKernel;
 use agenticos_runtime::AgentRuntime;
@@ -128,6 +128,12 @@ impl DaemonService {
             // ---------------------------------------------------------------
             let mut approvals = 0u64;
             let mut denials = 0u64;
+            let mut successful_mutations = 0u64;
+            let mut failed_mutations = 0u64;
+            let mut rollback_count = 0u64;
+            let mut cpu_weight_changes = 0u64;
+            let mut cpu_max_changes = 0u64;
+            let mut memory_max_changes = 0u64;
             let decision_total_ms;
             let mut executor_total_ms = 0u64;
 
@@ -233,6 +239,31 @@ impl DaemonService {
                                 let exec_ms = exec_start.elapsed().as_millis() as u64;
                                 executor_total_ms += exec_ms;
 
+                                match result.status {
+                                    ActionStatus::Succeeded => {
+                                        successful_mutations += 1;
+                                        match &prop.requested_action.kind {
+                                            ActionKind::CgroupSetCpuWeight { .. } => {
+                                                cpu_weight_changes += 1;
+                                            }
+                                            ActionKind::CgroupSetCpuMax { .. } => {
+                                                cpu_max_changes += 1;
+                                            }
+                                            ActionKind::CgroupSetMemoryMax { .. } => {
+                                                memory_max_changes += 1;
+                                            }
+                                            _ => {}
+                                        }
+                                        if result.rollback.is_some() {
+                                            rollback_count += 1;
+                                        }
+                                    }
+                                    ActionStatus::Failed => {
+                                        failed_mutations += 1;
+                                    }
+                                    _ => {}
+                                }
+
                                 let envelope = EventEnvelope::new(
                                     agenticos_domain::Topic::new(format!(
                                         "results.{}",
@@ -250,6 +281,7 @@ impl DaemonService {
                                     &trace_id,
                                     &format!("execution failed: {e}"),
                                 );
+                                failed_mutations += 1;
                             }
                         }
                     }
@@ -276,7 +308,16 @@ impl DaemonService {
             )
             .with_incident_count(incident_depth as f64)
             .with_safety_veto_count(safety_output.metrics.veto_count as f64)
-            .with_safety_escalations(safety_output.metrics.safety_escalations as f64);
+            .with_safety_escalations(safety_output.metrics.safety_escalations as f64)
+            .with_safety_freeze_ticks(safety_output.metrics.freeze_ticks as f64)
+            .with_safety_selective_vetoes(safety_output.metrics.selective_vetoes as f64)
+            .with_safety_global_vetoes(safety_output.metrics.global_vetoes as f64)
+            .with_executor_successful_mutations(successful_mutations as f64)
+            .with_executor_failed_mutations(failed_mutations as f64)
+            .with_executor_rollback_count(rollback_count as f64)
+            .with_executor_cpu_weight_changes(cpu_weight_changes as f64)
+            .with_executor_cpu_max_changes(cpu_max_changes as f64)
+            .with_executor_memory_max_changes(memory_max_changes as f64);
 
             let envelope = EventEnvelope::new(
                 agenticos_domain::Topic::new("metrics.daemon"),
@@ -291,6 +332,8 @@ impl DaemonService {
                 "[agenticos] observe={obs_count} proposals={proposal_depth} \
                  incidents={incident_depth} vetoes={veto_count} \
                  approved={approvals} denied={denials} \
+                 mutations={successful_mutations} failed_muts={failed_mutations} \
+                 rollbacks={rollback_count} \
                  tick={tick_duration_ms}ms decision_latency={decision_total_ms}ms \
                  exec_latency={executor_total_ms}ms"
             );

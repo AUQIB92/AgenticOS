@@ -1,0 +1,22 @@
+{
+  "scenario": "S5-adversarial",
+  "seed": 42,
+  "ticks": 5,
+  "iterations": 10,
+  "replay_consistent": true,
+  "total_proposals": 35,
+  "total_incidents": 5,
+  "total_vetoes": 65,
+  "total_arbitrations": 15,
+  "total_escalations": 35,
+  "total_approved": 0,
+  "total_denied": 0,
+  "mean_total_ms": 0.258328,
+  "mean_policy_eval_ms": 0.052481999999999994,
+  "mean_safety_eval_ms": 0.20550599999999997,
+  "veto_breakdown": {
+    "IncidentTriggered": 35,
+    "ResourceLimitsExceeded": 15,
+    "ConflictingProposals": 15
+  }
+}

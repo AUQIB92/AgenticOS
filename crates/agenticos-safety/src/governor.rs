@@ -92,11 +92,32 @@ impl DefaultSafetyGovernor {
         escalations.extend(conflict_incidents);
 
         // 3. Safety metrics
+        let freeze_ticks = if input.policy_input
+            .incidents
+            .iter()
+            .any(|i| matches!(i.category, IncidentCategory::Security) && i.severity == IncidentSeverity::Critical)
+        {
+            1
+        } else {
+            0
+        };
+        let selective_vetoes = vetoes
+            .iter()
+            .filter(|v| v.reason == VetoReason::SelectiveVeto)
+            .count() as u64;
+        let global_vetoes = vetoes
+            .iter()
+            .filter(|v| v.reason == VetoReason::IncidentTriggered)
+            .count() as u64;
+
         let metrics = SafetyMetrics {
             veto_count: vetoes.len() as u64,
             veto_reason_breakdown: count_reasons(&vetoes),
             safety_escalations: escalations.len() as u64,
             policy_violation_attempts: count_policy_violations(&vetoes),
+            freeze_ticks,
+            selective_vetoes,
+            global_vetoes,
         };
 
         Ok(SafetyOutput {
@@ -128,8 +149,8 @@ impl DefaultSafetyGovernor {
             ));
         }
 
-        // 3. Incident-triggered veto
-        if let Some(v) = self.check_incident_trigger(policy_input) {
+        // 3. Incident-triggered veto (graduated severity)
+        if let Some(v) = self.check_incident_trigger(proposal, policy_input) {
             reasons.push(v);
         }
 
@@ -173,27 +194,56 @@ impl DefaultSafetyGovernor {
         None
     }
 
-    /// Invariant 2: If security incidents exist, veto non-essential actions.
+    /// Invariant 2: Graduated incident-triggered veto.
+    ///
+    /// Severity → behavior:
+    /// - Critical → veto ALL proposals (global freeze = `IncidentTriggered`).
+    /// - Error → veto only resource-modifying proposals (`SelectiveVeto`).
+    /// - Warning → no automatic veto.
+    /// - No security incidents → no veto.
     fn check_incident_trigger(
         &self,
+        proposal: &Proposal,
         policy_input: &PolicyInput,
     ) -> Option<(VetoReason, String)> {
         if !self.config.veto_on_security_incidents {
             return None;
         }
 
-        let has_security_incident = policy_input
-            .incidents
-            .iter()
-            .any(|i| matches!(i.category, IncidentCategory::Security));
+        // Scan incidents for the highest severity.
+        let mut max_severity: Option<IncidentSeverity> = None;
+        for incident in &policy_input.incidents {
+            if !matches!(incident.category, IncidentCategory::Security) {
+                continue;
+            }
+            match incident.severity {
+                IncidentSeverity::Critical => {
+                    return Some((
+                        VetoReason::IncidentTriggered,
+                        "critical security incident active — all actions vetoed by safety governor"
+                            .into(),
+                    ));
+                }
+                IncidentSeverity::Error => {
+                    max_severity = Some(IncidentSeverity::Error);
+                }
+                IncidentSeverity::Warning => {
+                    if max_severity.is_none() {
+                        max_severity = Some(IncidentSeverity::Warning);
+                    }
+                }
+                _ => {}
+            }
+        }
 
-        if has_security_incident {
-            Some((
-                VetoReason::IncidentTriggered,
-                "security incident active — all actions vetoed by safety governor".into(),
-            ))
-        } else {
-            None
+        match max_severity {
+            Some(IncidentSeverity::Error) if is_resource_modifying(proposal) => {
+                Some((
+                    VetoReason::SelectiveVeto,
+                    "error severity incident active — resource-modifying actions vetoed".into(),
+                ))
+            }
+            _ => None,
         }
     }
 
@@ -336,6 +386,17 @@ fn extract_cpu_weight(p: &Proposal) -> Option<u64> {
         ActionKind::CgroupSetCpuWeight { weight, .. } => Some(*weight),
         _ => None,
     }
+}
+
+/// Returns `true` if the proposal's action modifies resource allocations.
+/// Read-only / lifecycle / advisory actions are allowed under Error-severity.
+fn is_resource_modifying(proposal: &Proposal) -> bool {
+    matches!(
+        proposal.requested_action.kind,
+        ActionKind::CgroupSetCpuMax { .. }
+            | ActionKind::CgroupSetCpuWeight { .. }
+            | ActionKind::CgroupSetMemoryMax { .. }
+    )
 }
 
 fn count_reasons(vetoes: &[VetoDecision]) -> HashMap<String, u64> {
@@ -521,10 +582,47 @@ mod tests {
     }
 
     // --------------------------------------------------------------
-    // 3. Incident-triggered veto
+    // 3. Incident-triggered veto (graduated severity)
     // --------------------------------------------------------------
     #[test]
-    fn incident_triggers_veto() {
+    fn critical_incident_triggers_global_veto() {
+        let governor = DefaultSafetyGovernor::with_defaults();
+        let p = proposal(
+            "agent-1",
+            ActionKind::CgroupSetCpuWeight {
+                group: "test".into(),
+                weight: 100,
+            },
+            ActionSafetyLevel::MediumRisk,
+            0.9,
+        );
+        let d = approved_decision(&p.id);
+
+        let incident = Incident::new(
+            IncidentCategory::Security,
+            IncidentSeverity::Critical,
+            AgentId::from("security-agent"),
+            None,
+            "fork storm detected",
+        );
+
+        let input = SafetyInput {
+            policy_input: &policy_input(vec![p], vec![incident]),
+            decisions: &[d],
+        };
+        let output = governor.evaluate(input).unwrap();
+
+        assert_eq!(output.approved.len(), 0);
+        assert_eq!(output.vetoes.len(), 1);
+        assert_eq!(output.vetoes[0].reason, VetoReason::IncidentTriggered);
+        assert_eq!(output.metrics.freeze_ticks, 1);
+        assert_eq!(output.metrics.global_vetoes, 1);
+        assert_eq!(output.metrics.selective_vetoes, 0);
+        assert_eq!(output.escalations.len(), 1);
+    }
+
+    #[test]
+    fn warning_incident_no_auto_veto() {
         let governor = DefaultSafetyGovernor::with_defaults();
         let p = proposal(
             "agent-1",
@@ -542,7 +640,7 @@ mod tests {
             IncidentSeverity::Warning,
             AgentId::from("security-agent"),
             None,
-            "fork storm detected",
+            "minor anomaly",
         );
 
         let input = SafetyInput {
@@ -551,9 +649,66 @@ mod tests {
         };
         let output = governor.evaluate(input).unwrap();
 
-        assert_eq!(output.approved.len(), 0);
+        // Warning → no automatic veto; proposal should pass through
+        assert_eq!(output.approved.len(), 1);
+        assert!(output.vetoes.is_empty());
+        assert_eq!(output.metrics.veto_count, 0);
+        assert_eq!(output.metrics.freeze_ticks, 0);
+        assert_eq!(output.metrics.selective_vetoes, 0);
+        assert_eq!(output.metrics.global_vetoes, 0);
+    }
+
+    #[test]
+    fn error_incident_selective_veto() {
+        let governor = DefaultSafetyGovernor::with_defaults();
+
+        // Resource-modifying action → should be vetoed
+        let p_modifying = proposal(
+            "agent-1",
+            ActionKind::CgroupSetCpuWeight {
+                group: "test".into(),
+                weight: 100,
+            },
+            ActionSafetyLevel::MediumRisk,
+            0.9,
+        );
+        let d_modifying = approved_decision(&p_modifying.id);
+
+        // Read-only action → should be allowed
+        let p_readonly = proposal(
+            "agent-2",
+            ActionKind::ObserveOnly,
+            ActionSafetyLevel::ReadOnly,
+            1.0,
+        );
+        let readonly_id = p_readonly.id.clone();
+        let d_readonly = approved_decision(&p_readonly.id);
+
+        let incident = Incident::new(
+            IncidentCategory::Security,
+            IncidentSeverity::Error,
+            AgentId::from("security-agent"),
+            None,
+            "suspicious process detected",
+        );
+
+        let input = SafetyInput {
+            policy_input: &policy_input(
+                vec![p_modifying, p_readonly],
+                vec![incident],
+            ),
+            decisions: &[d_modifying, d_readonly],
+        };
+        let output = governor.evaluate(input).unwrap();
+
+        // Resource-modifying proposal vetoed; ObserveOnly passes
+        assert_eq!(output.approved.len(), 1);
+        assert_eq!(output.approved[0].proposal_id, readonly_id);
         assert_eq!(output.vetoes.len(), 1);
-        assert_eq!(output.vetoes[0].reason, VetoReason::IncidentTriggered);
+        assert_eq!(output.vetoes[0].reason, VetoReason::SelectiveVeto);
+        assert_eq!(output.metrics.freeze_ticks, 0);
+        assert_eq!(output.metrics.selective_vetoes, 1);
+        assert_eq!(output.metrics.global_vetoes, 0);
         assert_eq!(output.escalations.len(), 1);
     }
 

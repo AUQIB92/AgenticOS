@@ -1,0 +1,9 @@
+### E1: Determinism — Replay Divergence Report
+
+| Workload | Iterations | Passed | Mismatches | Approved | Denied | Vetoes | Incidents | Mean Latency (ms) |
+|----------|-----------:|:------:|-----------:|--------:|------:|------:|----------:|------------------:|
+| cpu-contention | 1000 | ✓ | 0 | 50 | 0 | 0 | 0 | 0.1410 |
+| memory-pressure | 1000 | ✓ | 0 | 50 | 0 | 0 | 0 | 0.0718 |
+| mixed | 1000 | ✓ | 0 | 100 | 0 | 0 | 0 | 0.7007 |
+| process-explosion | 1000 | ✓ | 0 | 0 | 0 | 0 | 30 | 0.2186 |
+| incident-storm | 1000 | ✓ | 0 | 0 | 0 | 0 | 30 | 0.2640 |

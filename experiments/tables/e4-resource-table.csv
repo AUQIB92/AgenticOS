@@ -1,0 +1,14 @@
+### E4: Resource Governance — Throughput & Latency Report
+
+| Workload | Param | Value | Proposals | Approved | Denied | Proposal/Tick | Approval Rate | Mean Latency (ms) |
+|----------|-------|-----:|----------:|--------:|------:|-------------:|--------------:|------------------:|
+| cpu-contention | target_pressure | 0.30 | 0 | 0 | 0 | 0.0000 | 0.0000 | 0.0189 |
+| cpu-contention | target_pressure | 0.50 | 48 | 48 | 0 | 4.8000 | 1.0000 | 0.2797 |
+| cpu-contention | target_pressure | 0.70 | 50 | 50 | 0 | 5.0000 | 1.0000 | 0.1125 |
+| cpu-contention | target_pressure | 0.85 | 50 | 50 | 0 | 5.0000 | 1.0000 | 0.1232 |
+| cpu-contention | target_pressure | 0.95 | 50 | 50 | 0 | 5.0000 | 1.0000 | 0.1114 |
+| memory-pressure | target_memory_usage | 0.30 | 0 | 0 | 0 | 0.0000 | 0.0000 | 0.0136 |
+| memory-pressure | target_memory_usage | 0.50 | 0 | 0 | 0 | 0.0000 | 0.0000 | 0.0121 |
+| memory-pressure | target_memory_usage | 0.70 | 0 | 0 | 0 | 0.0000 | 0.0000 | 0.0122 |
+| memory-pressure | target_memory_usage | 0.85 | 50 | 50 | 0 | 5.0000 | 1.0000 | 0.0991 |
+| memory-pressure | target_memory_usage | 0.95 | 50 | 50 | 0 | 5.0000 | 1.0000 | 0.1008 |

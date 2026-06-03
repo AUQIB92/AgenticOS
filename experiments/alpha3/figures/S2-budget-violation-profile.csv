@@ -1,0 +1,6 @@
+scenario,iteration,tick,proposals,incidents,vetoes,arbitrations,escalations,approved,denied,policy_eval_ms,safety_eval_ms,total_ms
+S2-budget-violation,0,1,4,0,2,0,2,2,0,0.015000,0.055000,0.070400
+S2-budget-violation,0,2,4,0,2,0,2,2,0,0.012300,0.045300,0.057900
+S2-budget-violation,0,3,4,0,2,0,2,2,0,0.011100,0.040900,0.052300
+S2-budget-violation,0,4,4,0,2,0,2,2,0,0.010800,0.041700,0.052800
+S2-budget-violation,0,5,4,0,2,0,2,2,0,0.011900,0.043000,0.055200

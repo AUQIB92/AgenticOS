@@ -1,0 +1,20 @@
+{
+  "scenario": "S3-incident-driven",
+  "seed": 42,
+  "ticks": 5,
+  "iterations": 10,
+  "replay_consistent": true,
+  "total_proposals": 10,
+  "total_incidents": 5,
+  "total_vetoes": 10,
+  "total_arbitrations": 0,
+  "total_escalations": 10,
+  "total_approved": 0,
+  "total_denied": 0,
+  "mean_total_ms": 0.080402,
+  "mean_policy_eval_ms": 0.007060000000000001,
+  "mean_safety_eval_ms": 0.07309199999999998,
+  "veto_breakdown": {
+    "IncidentTriggered": 10
+  }
+}
