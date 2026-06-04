@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use agenticos_agents::{DummyAgentA, DummyAgentB, SecurityAgent};
 use agenticos_application::{AppError, EventBus, ObserverPort};
@@ -8,6 +8,7 @@ use agenticos_domain::AgentId;
 use agenticos_executor::{ApprovedActionExecutor, DryRunExecutor};
 #[cfg(target_os = "linux")]
 use agenticos_executor::LinuxCgroupExecutor;
+use agenticos_intelligence::WorkloadClassificationAgent;
 use agenticos_observe::SystemSampler;
 use agenticos_policy::DefaultPolicyKernel;
 use agenticos_runtime::{AgentRuntime, InMemoryAgentRuntime};
@@ -24,6 +25,8 @@ pub struct DaemonContext {
     pub safety_governor: DefaultSafetyGovernor,
     pub executor: Box<dyn ApprovedActionExecutor>,
     pub agent_runtime: InMemoryAgentRuntime,
+    /// Workload classifier agent (uses intelligence provider or built-in heuristic).
+    pub classifier: Arc<Mutex<WorkloadClassificationAgent>>,
 }
 
 impl DaemonContext {
@@ -95,6 +98,8 @@ impl DaemonContext {
             veto_on_security_incidents: true,
         });
 
+        let classifier = Self::create_classifier(&config)?;
+
         let mut ctx = Self {
             config,
             observer,
@@ -104,11 +109,80 @@ impl DaemonContext {
             safety_governor,
             executor,
             agent_runtime,
+            classifier,
         };
 
         ctx.register_default_agents()?;
 
         Ok(ctx)
+    }
+
+    /// Create the classifier (wrapping the intelligence provider).
+    ///
+    /// Prints detailed startup diagnostics:
+    ///   - configured provider name
+    ///   - selected (actual) provider name
+    ///   - model
+    ///   - API key presence (without exposing the key)
+    ///
+    /// Exits with an error if the configured provider cannot be initialized.
+    /// There is NO silent fallback — a misconfigured provider is a hard failure.
+    /// Returns true if the cache DB could be opened at the configured path.
+    fn cache_enabled(config: &DaemonConfig) -> bool {
+        agenticos_intelligence::RecommendationCache::new(&config.intelligence.cache_path).is_ok()
+    }
+
+    fn create_classifier(config: &DaemonConfig) -> Result<Arc<Mutex<WorkloadClassificationAgent>>, AppError> {
+        let ic = &config.intelligence;
+
+        let api_key_present = ic.api_key_present();
+        let provider_label = ic.provider_name.clone();
+        let model = ic.model.clone();
+        let cache_ok = Self::cache_enabled(config);
+        let cooldown = ic.classification_cooldown_seconds;
+
+        match ic.create_provider() {
+            Ok(provider) => {
+                eprintln!(
+                    "[agenticos-intelligence]
+configured_provider={}
+selected_provider={}
+model={}
+api_key_present={}
+cache_enabled={}
+cooldown_seconds={}",
+                    provider_label, provider_label, model,
+                    if api_key_present { "true" } else { "false" },
+                    if cache_ok { "true" } else { "false" },
+                    cooldown,
+                );
+                Ok(Arc::new(Mutex::new(
+                    WorkloadClassificationAgent::with_provider_and_cooldown(
+                        AgentId::from("classifier"),
+                        provider,
+                        cooldown,
+                    ),
+                )))
+            }
+            Err(e) => {
+                eprintln!(
+                    "[agenticos-intelligence]
+configured_provider={}
+selected_provider=<ERROR>
+model={}
+api_key_present={}
+cache_enabled={}
+error: GeminiProvider initialization failed: {}",
+                    provider_label, model,
+                    if api_key_present { "true" } else { "false" },
+                    if cache_ok { "true" } else { "false" },
+                    e,
+                );
+                Err(AppError::Message(format!(
+                    "GeminiProvider initialization failed: {e}"
+                )))
+            }
+        }
     }
 
     fn register_default_agents(&mut self) -> Result<(), AppError> {

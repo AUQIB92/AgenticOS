@@ -6,9 +6,12 @@ mod tests;
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().ok();
     let config_path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "configs/dev.toml".to_owned());
+
+    println!("Loading config: {config_path}");
 
     let config = match config::DaemonConfig::from_file(&config_path) {
         Ok(c) => c,

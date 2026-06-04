@@ -51,6 +51,13 @@ fn action_kind_name(kind: &ActionKind) -> &'static str {
         ActionKind::ProcessTerminateGroup { .. } => "ProcessTerminateGroup",
         ActionKind::WorkloadClassifyRecommend { .. } => "WorkloadClassifyRecommend",
         ActionKind::ObserveOnly => "ObserveOnly",
+        ActionKind::LaunchApplication { .. } => "LaunchApplication",
+        ActionKind::OpenUrl { .. } => "OpenUrl",
+        ActionKind::RunCommand { .. } => "RunCommand",
+        ActionKind::CreateDirectory { .. } => "CreateDirectory",
+        ActionKind::OpenFile { .. } => "OpenFile",
+        ActionKind::CloneRepository { .. } => "CloneRepository",
+        ActionKind::CreateProjectWorkspace { .. } => "CreateProjectWorkspace",
     }
 }
 

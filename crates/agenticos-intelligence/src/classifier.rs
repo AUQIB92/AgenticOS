@@ -1,5 +1,8 @@
+use std::collections::BTreeSet;
+use std::time::{Duration, Instant};
+
 use agenticos_domain::{
-    AgentId, Observation, ObservationPayload, Recommendation, WorkloadClass,
+    AgentId, Observation, ObservationPayload, ProviderMetadata, Recommendation, WorkloadClass,
     WorkloadObservationSummary,
 };
 
@@ -127,6 +130,7 @@ impl LlmProvider for WorkloadClassifier {
             format!("Workload classified as {}", classification.label()),
             reasoning,
         )
+        .with_provider(ProviderMetadata::new("classifier", "heuristic", false, 0))
     }
 }
 
@@ -270,19 +274,41 @@ fn collect_process_names(observations: &[Observation]) -> Vec<String> {
 
 pub struct WorkloadClassificationAgent {
     agent_id: AgentId,
-    classifier: WorkloadClassifier,
+    classifier: Box<dyn LlmProvider>,
     classification_count: u64,
     class_counts: std::collections::HashMap<String, u64>,
+    last_summary: Option<WorkloadObservationSummary>,
+    last_recommendation: Option<Recommendation>,
+    last_classification_time: Option<Instant>,
+    cooldown_seconds: u64,
+    classifications_skipped: u64,
 }
 
 impl WorkloadClassificationAgent {
     pub fn new(agent_id: AgentId) -> Self {
-        let classifier = WorkloadClassifier::new(agent_id.clone());
+        let classifier_id = agent_id.clone();
+        Self::with_provider_and_cooldown(agent_id, Box::new(WorkloadClassifier::new(classifier_id)), 60)
+    }
+
+    pub fn with_provider(agent_id: AgentId, provider: Box<dyn LlmProvider>) -> Self {
+        Self::with_provider_and_cooldown(agent_id, provider, 60)
+    }
+
+    pub fn with_provider_and_cooldown(
+        agent_id: AgentId,
+        provider: Box<dyn LlmProvider>,
+        cooldown_seconds: u64,
+    ) -> Self {
         Self {
             agent_id,
-            classifier,
+            classifier: provider,
             classification_count: 0,
             class_counts: std::collections::HashMap::new(),
+            last_summary: None,
+            last_recommendation: None,
+            last_classification_time: None,
+            cooldown_seconds,
+            classifications_skipped: 0,
         }
     }
 
@@ -298,14 +324,48 @@ impl WorkloadClassificationAgent {
         self.class_counts.get(class.label()).copied().unwrap_or(0)
     }
 
+    pub fn classifications_skipped(&self) -> u64 {
+        self.classifications_skipped
+    }
+
     pub fn classify_workload(&mut self, observations: &[Observation]) -> Recommendation {
         let summary = self.build_summary(observations);
+
+        // Throttling gate: skip classification if no significant change or within cooldown
+        if let (Some(ref last_summary), Some(ref last_rec), Some(ref last_time)) = (
+            &self.last_summary,
+            &self.last_recommendation,
+            self.last_classification_time,
+        ) {
+            let cooldown_ok = last_time.elapsed() >= Duration::from_secs(self.cooldown_seconds);
+            let changed = has_significant_change(last_summary, &summary);
+
+            if !changed || !cooldown_ok {
+                self.classifications_skipped += 1;
+                let mut rec = Recommendation::new(
+                    last_rec.source_agent.clone(),
+                    last_rec.confidence,
+                    last_rec.summary.clone(),
+                    last_rec.reasoning.clone(),
+                );
+                if let Some(ref meta) = last_rec.provider {
+                    rec = rec.with_provider(meta.clone());
+                }
+                self.last_summary = Some(summary);
+                return rec;
+            }
+        }
+
         let context = self.summary_to_context(&summary);
         let recommendation = self.classifier.generate_recommendation(context);
 
         self.classification_count += 1;
         let class_label = extract_class_label(&recommendation);
         *self.class_counts.entry(class_label).or_insert(0) += 1;
+
+        self.last_summary = Some(summary);
+        self.last_recommendation = Some(recommendation.clone());
+        self.last_classification_time = Some(Instant::now());
 
         recommendation
     }
@@ -354,6 +414,24 @@ names: {}",
     }
 }
 
+/// Returns true if the current observation summary differs significantly from
+/// the previous summary, indicating a re-classification is warranted.
+fn has_significant_change(
+    prev: &WorkloadObservationSummary,
+    curr: &WorkloadObservationSummary,
+) -> bool {
+    (curr.cpu_utilization - prev.cpu_utilization).abs() > 10.0
+        || (curr.memory_utilization - prev.memory_utilization).abs() > 10.0
+        || (curr.process_count as i64 - prev.process_count as i64).abs() > 5i64
+        || {
+            let prev_set: BTreeSet<&str> =
+                prev.process_names.iter().map(|s| s.as_str()).collect();
+            let curr_set: BTreeSet<&str> =
+                curr.process_names.iter().map(|s| s.as_str()).collect();
+            prev_set != curr_set
+        }
+}
+
 fn extract_class_label(recommendation: &Recommendation) -> String {
     if recommendation.summary.contains("Database") {
         "Database".into()
@@ -377,6 +455,16 @@ mod tests {
         CgroupObservation, CpuObservation, MemoryObservation, ObservationId, ObservationSource,
         ProcessObservation,
     };
+
+    /// Create a classifier agent with cooldown disabled for deterministic tests.
+    fn make_classifier() -> WorkloadClassificationAgent {
+        let id = AgentId::from("classifier");
+        WorkloadClassificationAgent::with_provider_and_cooldown(
+            id.clone(),
+            Box::new(WorkloadClassifier::new(id)),
+            0,
+        )
+    }
 
     fn make_observation(payload: ObservationPayload) -> Observation {
         Observation {
@@ -450,7 +538,7 @@ mod tests {
 
     #[test]
     fn classify_database_workload() {
-        let mut agent = WorkloadClassificationAgent::new(AgentId::from("classifier"));
+        let mut agent = make_classifier();
         let obs = vec![
             make_process_obs("postgres", 60.0),
             make_process_obs("python", 2.0),
@@ -463,7 +551,7 @@ mod tests {
 
     #[test]
     fn classify_build_workload() {
-        let mut agent = WorkloadClassificationAgent::new(AgentId::from("classifier"));
+        let mut agent = make_classifier();
         let obs = vec![
             make_process_obs("rustc", 55.0),
             make_process_obs("cargo", 10.0),
@@ -477,7 +565,7 @@ mod tests {
 
     #[test]
     fn classify_interactive_workload() {
-        let mut agent = WorkloadClassificationAgent::new(AgentId::from("classifier"));
+        let mut agent = make_classifier();
         let obs = vec![
             make_process_obs("firefox", 15.0),
             make_process_obs("Xorg", 8.0),
@@ -492,7 +580,7 @@ mod tests {
 
     #[test]
     fn classify_unknown_workload() {
-        let mut agent = WorkloadClassificationAgent::new(AgentId::from("classifier"));
+        let mut agent = make_classifier();
         let obs = vec![
             make_process_obs("someproc", 5.0),
             make_process_obs("another", 3.0),
@@ -504,7 +592,7 @@ mod tests {
 
     #[test]
     fn classify_system_service_workload() {
-        let mut agent = WorkloadClassificationAgent::new(AgentId::from("classifier"));
+        let mut agent = make_classifier();
         let obs = vec![
             make_process_obs("systemd", 5.0),
             make_process_obs("journald", 3.0),
@@ -517,7 +605,7 @@ mod tests {
 
     #[test]
     fn classify_batch_workload() {
-        let mut agent = WorkloadClassificationAgent::new(AgentId::from("classifier"));
+        let mut agent = make_classifier();
         let obs = vec![
             make_cgroup_obs(900_000, 45),
         ];
@@ -527,8 +615,8 @@ mod tests {
 
     #[test]
     fn deterministic_classification() {
-        let mut agent1 = WorkloadClassificationAgent::new(AgentId::from("classifier"));
-        let mut agent2 = WorkloadClassificationAgent::new(AgentId::from("classifier"));
+        let mut agent1 = make_classifier();
+        let mut agent2 = make_classifier();
         let obs = vec![
             make_process_obs("postgres", 60.0),
             make_process_obs("python", 2.0),
@@ -542,7 +630,7 @@ mod tests {
 
     #[test]
     fn classification_counts_metrics() {
-        let mut agent = WorkloadClassificationAgent::new(AgentId::from("classifier"));
+        let mut agent = make_classifier();
 
         let db_obs = vec![
             make_process_obs("postgres", 60.0),
@@ -569,7 +657,7 @@ mod tests {
 
     #[test]
     fn recommendation_is_purely_advisory() {
-        let mut agent = WorkloadClassificationAgent::new(AgentId::from("classifier"));
+        let mut agent = make_classifier();
         let obs = vec![make_process_obs("postgres", 45.0), make_cgroup_obs(950_000, 14)];
         let rec = agent.classify_workload(&obs);
         // Verify the Recommendation has no action-related fields by serializing
@@ -591,7 +679,7 @@ mod tests {
         use agenticos_domain::{EventEnvelope, EventPayload, TraceId};
         use agenticos_bus::{InMemoryTraceStore, Topic, TraceStore};
 
-        let mut agent = WorkloadClassificationAgent::new(AgentId::from("classifier"));
+        let mut agent = make_classifier();
         let store = InMemoryTraceStore::new();
         let trace_id = TraceId::new();
         let topic = Topic::new("recommendations.classifier");
@@ -652,7 +740,7 @@ mod tests {
 
     #[test]
     fn build_summary_from_observations() {
-        let agent = WorkloadClassificationAgent::new(AgentId::from("classifier"));
+        let agent = make_classifier();
         let obs = vec![
             make_process_obs("postgres", 45.0),
             make_process_obs("worker", 10.0),
@@ -669,7 +757,7 @@ mod tests {
 
     #[test]
     fn recommendation_has_no_action_fields() {
-        let mut agent = WorkloadClassificationAgent::new(AgentId::from("classifier"));
+        let mut agent = make_classifier();
         let obs = vec![make_process_obs("postgres", 45.0), make_cgroup_obs(950_000, 14)];
         let rec = agent.classify_workload(&obs);
         let json = serde_json::to_value(&rec).unwrap();

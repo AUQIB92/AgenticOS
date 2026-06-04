@@ -1,0 +1,20 @@
+[agenticos-intelligence] configured_provider=gemini selected_provider=gemini model=gemini-2.5-flash api_key_present=true
+warning: Gemini API error (400 Bad Request): {
+  "error": {
+    "code": 400,
+    "message": "Invalid JSON payload received. Unknown name \"responseMimeType\" at 'generation_config': Cannot find field.",
+    "status": "INVALID_ARGUMENT",
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.rpc.BadRequest",
+        "fieldViolations": [
+          {
+            "field": "generation_config",
+            "description": "Invalid JSON payload received. Unknown name \"responseMimeType\" at 'generation_config': Cannot find field."
+          }
+        ]
+      }
+    ]
+  }
+}
+

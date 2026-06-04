@@ -1,0 +1,13 @@
+Loading config: configs/dev.toml
+agenticos daemon starting...
+[agenticos] observe=2 proposals=0 incidents=0 vetoes=0 approved=0 denied=0 mutations=0 failed_muts=0 rollbacks=0 recs=1 tick=692ms decision_latency=0ms exec_latency=0ms
+[agenticos] observe=2 proposals=0 incidents=0 vetoes=0 approved=0 denied=0 mutations=0 failed_muts=0 rollbacks=0 recs=2 tick=20ms decision_latency=0ms exec_latency=0ms
+[agenticos] observe=2 proposals=0 incidents=0 vetoes=0 approved=0 denied=0 mutations=0 failed_muts=0 rollbacks=0 recs=3 tick=23ms decision_latency=0ms exec_latency=0ms
+[agenticos] observe=2 proposals=0 incidents=0 vetoes=0 approved=0 denied=0 mutations=0 failed_muts=0 rollbacks=0 recs=4 tick=36ms decision_latency=0ms exec_latency=0ms
+[agenticos] observe=2 proposals=0 incidents=0 vetoes=0 approved=0 denied=0 mutations=0 failed_muts=0 rollbacks=0 recs=5 tick=38ms decision_latency=0ms exec_latency=0ms
+[agenticos] observe=2 proposals=0 incidents=0 vetoes=0 approved=0 denied=0 mutations=0 failed_muts=0 rollbacks=0 recs=6 tick=26ms decision_latency=0ms exec_latency=0ms
+[agenticos] observe=2 proposals=0 incidents=0 vetoes=0 approved=0 denied=0 mutations=0 failed_muts=0 rollbacks=0 recs=7 tick=18ms decision_latency=0ms exec_latency=0ms
+[agenticos] observe=2 proposals=0 incidents=0 vetoes=0 approved=0 denied=0 mutations=0 failed_muts=0 rollbacks=0 recs=8 tick=44ms decision_latency=0ms exec_latency=0ms
+[agenticos] observe=2 proposals=0 incidents=0 vetoes=0 approved=0 denied=0 mutations=0 failed_muts=0 rollbacks=0 recs=9 tick=44ms decision_latency=0ms exec_latency=0ms
+[agenticos] observe=2 proposals=0 incidents=0 vetoes=0 approved=0 denied=0 mutations=0 failed_muts=0 rollbacks=0 recs=10 tick=40ms decision_latency=0ms exec_latency=0ms
+[agenticos] observe=2 proposals=0 incidents=0 vetoes=0 approved=0 denied=0 mutations=0 failed_muts=0 rollbacks=0 recs=11 tick=32ms decision_latency=0ms exec_latency=0ms

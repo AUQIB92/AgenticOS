@@ -185,6 +185,13 @@ mod alpha5_impl {
             ActionKind::ProcessTerminateGroup { .. } => "cgroup.procs",
             ActionKind::WorkloadClassifyRecommend { .. } => "none",
             ActionKind::ObserveOnly => "none",
+            ActionKind::LaunchApplication { .. } => "none",
+            ActionKind::OpenUrl { .. } => "none",
+            ActionKind::RunCommand { .. } => "none",
+            ActionKind::CreateDirectory { .. } => "none",
+            ActionKind::OpenFile { .. } => "none",
+            ActionKind::CloneRepository { .. } => "none",
+            ActionKind::CreateProjectWorkspace { .. } => "none",
         }
     }
 
@@ -200,6 +207,13 @@ mod alpha5_impl {
             ActionKind::ProcessTerminateGroup { .. } => "ProcessTerminateGroup",
             ActionKind::WorkloadClassifyRecommend { .. } => "WorkloadClassifyRecommend",
             ActionKind::ObserveOnly => "ObserveOnly",
+            ActionKind::LaunchApplication { .. } => "LaunchApplication",
+            ActionKind::OpenUrl { .. } => "OpenUrl",
+            ActionKind::RunCommand { .. } => "RunCommand",
+            ActionKind::CreateDirectory { .. } => "CreateDirectory",
+            ActionKind::OpenFile { .. } => "OpenFile",
+            ActionKind::CloneRepository { .. } => "CloneRepository",
+            ActionKind::CreateProjectWorkspace { .. } => "CreateProjectWorkspace",
         }
     }
 

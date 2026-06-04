@@ -14,7 +14,7 @@ struct Cli {
     db: String,
 
     /// Output as JSON
-    #[arg(long)]
+    #[arg(long, global = true)]
     json: bool,
 
     #[command(subcommand)]
@@ -48,9 +48,57 @@ enum Command {
     },
     /// Show workload classification recommendations
     Recommendations,
+    /// Show intelligence provider status (provider, model, API key, cache)
+    #[command(name = "intelligence-status")]
+    IntelligenceStatus,
+    /// Show debug details for the last N Gemini classifications
+    #[command(name = "classifications-debug")]
+    ClassificationsDebug {
+        /// Number of recent classifications to show
+        #[arg(long, default_value = "5")]
+        last: usize,
+    },
+    /// Parse a natural language request into a structured intent
+    Ask {
+        /// The natural language request to parse
+        text: String,
+    },
+    /// Generate a plan from a previously stored intent
+    Plan {
+        /// The IntentId to plan from (e.g. IntentId-1)
+        intent_id: String,
+    },
+    /// Show the action graph for a plan
+    Actions {
+        /// The PlanId to show actions for (e.g. PlanId-1)
+        plan_id: String,
+    },
+    /// Execute a plan through the full governance pipeline
+    Execute {
+        /// The PlanId to execute (e.g. PlanId-1)
+        plan_id: String,
+    },
+    /// List all stored intents
+    Intents,
+    /// List all stored plans
+    Plans,
+    /// Show detailed plan information (read-only)
+    #[command(name = "plan-show")]
+    PlanShow {
+        /// The PlanId to inspect (e.g. PlanId-1)
+        plan_id: String,
+    },
+    /// Execute a plan by intent ID (avoids plan selection errors)
+    #[command(name = "execute-intent")]
+    ExecuteIntent {
+        /// The IntentId to execute (e.g. IntentId-1)
+        intent_id: String,
+    },
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
+    dotenvy::dotenv().ok();
     let cli = Cli::parse();
 
     let conn = match Connection::open(&cli.db) {
@@ -90,6 +138,15 @@ fn main() {
             eprintln!("  health      Run governance integrity checks");
             eprintln!("  recommendations Show workload classification recommendations");
             eprintln!("  cgroup-state Show live cgroup v2 state (cpu.weight, cpu.max, memory.max)");
+            eprintln!("  classifications-debug Show debug info for last N Gemini classifications");
+            eprintln!("  ask         Parse a natural language request into a structured intent");
+            eprintln!("  plan        Generate a plan from a stored intent by ID");
+            eprintln!("  actions     Show the action graph for a plan by ID");
+            eprintln!("  execute     Execute a plan through the full governance pipeline");
+            eprintln!("  intents     List all stored intents");
+            eprintln!("  plans       List all stored plans");
+            eprintln!("  plan-show   Show detailed plan information (read-only)");
+            eprintln!("  execute-intent Execute a plan by intent ID");
             Ok(())
         }
         Some(Command::Status) => cmd_status(&conn),
@@ -102,6 +159,16 @@ fn main() {
         Some(Command::Health) => cmd_health(&conn),
         Some(Command::CgroupState { cgroup_path }) => cmd_cgroup_state(cgroup_path),
         Some(Command::Recommendations) => cmd_recommendations(&conn),
+        Some(Command::IntelligenceStatus) => cmd_intelligence_status(&conn),
+        Some(Command::ClassificationsDebug { last }) => cmd_classifications_debug(&conn, *last),
+        Some(Command::Ask { text }) => cmd_ask(&conn, &cli.db, text),
+        Some(Command::Plan { intent_id }) => cmd_plan(&conn, &cli.db, intent_id),
+        Some(Command::Actions { plan_id }) => cmd_actions(&conn, plan_id),
+        Some(Command::Execute { plan_id }) => cmd_execute(&conn, plan_id),
+        Some(Command::Intents) => cmd_intents(&conn, &cli.db),
+        Some(Command::Plans) => cmd_plans(&conn),
+        Some(Command::PlanShow { plan_id }) => cmd_plan_show(&conn, plan_id),
+        Some(Command::ExecuteIntent { intent_id }) => cmd_execute_intent(&conn, intent_id),
     };
 
     if let Err(e) = result {
@@ -595,6 +662,59 @@ fn cmd_metrics(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
         })
         .unwrap_or_else(|| "N/A".into());
 
+    let recommendation_count: u64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM traces WHERE topic LIKE 'recommendations.%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let gemini_requests: u64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM traces WHERE topic LIKE 'recommendations.%' AND json_extract(payload_json, '$.Recommendation.provider.provider_name') = 'gemini'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let cache_hits: u64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM traces WHERE topic LIKE 'recommendations.%' AND json_extract(payload_json, '$.Recommendation.provider.cache_hit') = 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let cache_misses: u64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM traces WHERE topic LIKE 'recommendations.%' AND (json_extract(payload_json, '$.Recommendation.provider.cache_hit') IS NULL OR json_extract(payload_json, '$.Recommendation.provider.cache_hit') = 0)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    // Extract classifications_skipped_total from the latest metrics.daemon trace
+    let classifications_skipped_total: String = conn
+        .query_row(
+            "SELECT payload_json FROM traces WHERE topic = 'metrics.daemon' ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|json| {
+            let v: serde_json::Value = serde_json::from_str(&json).ok()?;
+            let samples = v.get("samples")?.as_array()?;
+            for sample in samples {
+                if sample.get("name")?.as_str()? == "classifications_skipped_total" {
+                    let vals = sample.get("value")?.get("Counter")?;
+                    return vals.as_u64().map(|v| v.to_string());
+                }
+            }
+            None
+        })
+        .unwrap_or_else(|| "0".into());
+
     let mut rows = vec![
         MetricsRow { metric: "proposal_count".into(), value: proposal_count.to_string() },
         MetricsRow { metric: "incident_count".into(), value: incident_count.to_string() },
@@ -603,6 +723,11 @@ fn cmd_metrics(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
         MetricsRow { metric: "denied_count".into(), value: denied_count.to_string() },
         MetricsRow { metric: "executor_count".into(), value: result_count.to_string() },
         MetricsRow { metric: "decision_latency".into(), value: decision_latency },
+        MetricsRow { metric: "recommendation_count".into(), value: recommendation_count.to_string() },
+        MetricsRow { metric: "gemini_requests_total".into(), value: gemini_requests.to_string() },
+        MetricsRow { metric: "cache_hits_total".into(), value: cache_hits.to_string() },
+        MetricsRow { metric: "cache_misses_total".into(), value: cache_misses.to_string() },
+        MetricsRow { metric: "classifications_skipped_total".into(), value: classifications_skipped_total },
     ];
 
     for (reason, cnt) in &veto_breakdown {
@@ -994,6 +1119,9 @@ struct RecommendationRow {
     classification: String,
     confidence: f64,
     summary: String,
+    provider_name: String,
+    model_name: String,
+    cache_hit: bool,
 }
 
 fn cmd_recommendations(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
@@ -1020,12 +1148,24 @@ fn cmd_recommendations(conn: &Connection) -> Result<(), Box<dyn std::error::Erro
             let confidence = rec.get("confidence")?.as_f64()?;
             let summary = rec.get("summary")?.as_str()?.to_owned();
             let agent = rec.get("source_agent")?.as_str()?.to_owned();
+            let provider = rec.get("provider");
+            let (provider_name, model_name, cache_hit) = match provider {
+                Some(p) => (
+                    p.get("provider_name").and_then(|v| v.as_str()).unwrap_or("unknown").to_owned(),
+                    p.get("model_name").and_then(|v| v.as_str()).unwrap_or("unknown").to_owned(),
+                    p.get("cache_hit").and_then(|v| v.as_bool()).unwrap_or(false),
+                ),
+                None => ("unknown".into(), "unknown".into(), false),
+            };
             Some(RecommendationRow {
                 timestamp,
                 agent,
                 classification,
                 confidence,
                 summary,
+                provider_name,
+                model_name,
+                cache_hit,
             })
         })
         .collect();
@@ -1035,16 +1175,850 @@ fn cmd_recommendations(conn: &Connection) -> Result<(), Box<dyn std::error::Erro
         return Ok(());
     }
 
-    print_output(&rows, &["TIMESTAMP", "AGENT", "CLASSIFICATION", "CONFIDENCE", "SUMMARY"],
+    print_output(&rows, &["TIMESTAMP", "AGENT", "CLASSIFICATION", "CONFIDENCE", "PROVIDER", "MODEL", "CACHE_HIT", "SUMMARY"],
         |r| vec![
             r.timestamp.clone(),
             r.agent.clone(),
             r.classification.clone(),
             format!("{:.2}", r.confidence),
+            r.provider_name.clone(),
+            r.model_name.clone(),
+            if r.cache_hit { "true".into() } else { "false".into() },
             r.summary.clone(),
         ],
     );
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Intelligence Status
+// ---------------------------------------------------------------------------
+
+fn cmd_intelligence_status(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = agenticos_intelligence::IntelligenceConfig::default();
+
+    let api_key_present = cfg.api_key_present();
+
+    let cache_entries = match agenticos_intelligence::RecommendationCache::new(&cfg.cache_path) {
+        Ok(cache) => cache.len().unwrap_or(0),
+        Err(_) => 0,
+    };
+
+    let recommendation_count: u64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM traces WHERE topic LIKE 'recommendations.%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let gemini_requests_total: u64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM traces WHERE topic LIKE 'recommendations.%' AND json_extract(payload_json, '$.Recommendation.provider.provider_name') = 'gemini'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let cache_hits_total: u64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM traces WHERE topic LIKE 'recommendations.%' AND json_extract(payload_json, '$.Recommendation.provider.cache_hit') = 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let cache_misses_total: u64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM traces WHERE topic LIKE 'recommendations.%' AND (json_extract(payload_json, '$.Recommendation.provider.cache_hit') IS NULL OR json_extract(payload_json, '$.Recommendation.provider.cache_hit') = 0)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let classifications_skipped_total: String = conn
+        .query_row(
+            "SELECT payload_json FROM traces WHERE topic = 'metrics.daemon' ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|json| {
+            let v: serde_json::Value = serde_json::from_str(&json).ok()?;
+            let samples = v.get("samples")?.as_array()?;
+            for sample in samples {
+                if sample.get("name")?.as_str()? == "classifications_skipped_total" {
+                    let vals = sample.get("value")?.get("Counter")?;
+                    return vals.as_u64().map(|v| v.to_string());
+                }
+            }
+            None
+        })
+        .unwrap_or_else(|| "0".into());
+
+    let last_recommendation: Option<(String, String)> = conn
+        .query_row(
+            "SELECT payload_json FROM traces WHERE topic LIKE 'recommendations.%' ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|json| {
+            let v: serde_json::Value = serde_json::from_str(&json).ok()?;
+            let rec = v.get("Recommendation")?;
+            let provider = rec.get("provider");
+            let provider_name = provider
+                .and_then(|p| p.get("provider_name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_owned();
+            let timestamp = rec.get("timestamp")?.as_str()?.to_owned();
+            Some((provider_name, timestamp))
+        });
+
+    let (last_provider_used, last_recommendation_timestamp) = match last_recommendation {
+        Some((p, ts)) => (p, ts),
+        None => ("none".into(), "none".into()),
+    };
+
+    let output = format!(
+        "configured_provider            = {}
+selected_provider            = {}
+model                        = {}
+api_key_present              = {}
+cache_entries                = {}
+recommendation_count         = {}
+gemini_requests_total        = {}
+cache_hits_total             = {}
+cache_misses_total           = {}
+classifications_skipped_total = {}
+last_provider_used           = {}
+last_recommendation_timestamp = {}",
+        cfg.provider_name,
+        cfg.provider_name,
+        cfg.model,
+        if api_key_present { "true" } else { "false" },
+        cache_entries,
+        recommendation_count,
+        gemini_requests_total,
+        cache_hits_total,
+        cache_misses_total,
+        classifications_skipped_total,
+        last_provider_used,
+        last_recommendation_timestamp,
+    );
+
+    println!("{output}");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Classifications Debug
+// ---------------------------------------------------------------------------
+
+fn cmd_classifications_debug(conn: &Connection, last: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let mut stmt = conn.prepare(
+        "SELECT payload_json, timestamp FROM traces WHERE topic LIKE 'recommendations.%' ORDER BY id DESC LIMIT ?1"
+    )?;
+
+    let rows: Vec<serde_json::Value> = stmt
+        .query_map(rusqlite::params![last as i64], |row| {
+            let payload_json: String = row.get(0)?;
+            Ok(payload_json)
+        })?
+        .filter_map(|r| r.ok())
+        .filter_map(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+        .collect();
+
+    if rows.is_empty() {
+        println!("No classifications found.");
+        return Ok(());
+    }
+
+    for (i, v) in rows.iter().enumerate() {
+        let rec = match v.get("Recommendation") {
+            Some(r) => r,
+            None => continue,
+        };
+
+        let timestamp = rec.get("timestamp").and_then(|t| t.as_str()).unwrap_or("?");
+        let summary = rec.get("summary").and_then(|s| s.as_str()).unwrap_or("?");
+        let confidence = rec.get("confidence").and_then(|c| c.as_f64()).unwrap_or(0.0);
+        let provider = rec.get("provider");
+        let cache_hit = provider.and_then(|p| p.get("cache_hit")).and_then(|c| c.as_bool()).unwrap_or(false);
+        let extra = provider.and_then(|p| p.get("extra")).and_then(|e| e.as_object());
+
+        let prompt = extra
+            .and_then(|e| e.get("prompt"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("(not recorded)");
+        let raw_response = extra
+            .and_then(|e| e.get("raw_response"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("(not recorded)");
+        let parsed = extra
+            .and_then(|e| e.get("parsed_classification"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("(not recorded)");
+        let obs_summary = extra
+            .and_then(|e| e.get("observation_summary"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("(not recorded)");
+        let fallback_reason = extra
+            .and_then(|e| e.get("fallback_reason"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("(none)");
+        let parse_error = extra
+            .and_then(|e| e.get("parse_error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("(none)");
+
+        println!("────────────────────────────────────────────────────────────");
+        println!("#{} — {}  cache_hit={}", i + 1, timestamp, if cache_hit { "true" } else { "false" });
+        println!();
+        println!("Parsed Classification: {}", parsed);
+        println!("Confidence:            {:.2}", confidence);
+        println!("Fallback Reason:       {}", fallback_reason);
+        println!("Parse Error:           {}", parse_error);
+        println!("Summary:               {}", summary);
+        println!();
+        println!("--- Observation Summary ---");
+        println!("{}", obs_summary);
+        println!();
+        println!("--- Prompt Sent To Gemini ---");
+        println!("{}", prompt);
+        println!();
+        if raw_response != "(not recorded)" && raw_response != "API call failed" {
+            if let Ok(parsed_json) = serde_json::from_str::<serde_json::Value>(raw_response) {
+                let pretty = serde_json::to_string_pretty(&parsed_json).unwrap_or_else(|_| raw_response.to_owned());
+                println!("--- Raw Gemini Response (JSON) ---");
+                println!("{}", pretty);
+            } else {
+                println!("--- Raw Gemini Response ---");
+                println!("{}", raw_response);
+            }
+        } else {
+            println!("--- Raw Gemini Response ---");
+            println!("{}", raw_response);
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Ask (Intent Parsing)
+// ---------------------------------------------------------------------------
+
+fn cmd_ask(conn: &Connection, db_path: &str, text: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // CLI uses MockIntentParser — deterministic, no API key, no rate limits.
+    // GeminiIntentParser is available programmatically for daemon integration.
+    let parser: Box<dyn agenticos_intelligence::IntentParser> =
+        Box::new(agenticos_intelligence::MockIntentParser::new());
+
+    // Store intents in the same database as the trace store.
+    // Use a separate table "intents" alongside "traces".
+    let store = match agenticos_intelligence::IntentStore::new(db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: cannot open intent store: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let agent = agenticos_intelligence::IntentAgent::new(parser, store);
+
+    match agent.parse_and_store(text) {
+        Ok(intent) => {
+            println!("Detected Intent:");
+            println!("  type:       {}", intent.intent_type);
+            println!("  confidence: {:.2}", intent.confidence);
+            if !intent.parameters.is_empty() {
+                println!("  parameters:");
+                for (k, v) in &intent.parameters {
+                    println!("    {}: {}", k, v);
+                }
+            }
+            println!("  id:         {}", intent.id);
+            println!("  text:       {}", intent.source_text);
+
+            // Persist to the trace store database as well, so it appears in replay.
+            let _ = persist_intent_to_trace_store(conn, &intent);
+        }
+        Err(e) => {
+            eprintln!("error: failed to parse intent: {e}");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_plan(conn: &Connection, db_path: &str, intent_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use agenticos_intelligence::PlannerAgent;
+
+    // Look up the intent from the traces table by message_id.
+    let payload_json: String = conn
+        .query_row(
+            "SELECT payload_json FROM traces WHERE message_id = ?1 AND topic LIKE 'intents.%' ORDER BY rowid DESC LIMIT 1",
+            rusqlite::params![intent_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| format!("intent '{}' not found in trace store", intent_id))?;
+
+    let intent: agenticos_domain::Intent =
+        serde_json::from_str(&payload_json)
+            .map_err(|e| format!("failed to deserialize intent '{}': {e}", intent_id))?;
+
+    // Create plan store (persistent DB) and planner.
+    // The plan store shares the same DB file as the trace store and intent store.
+    let plan_store = agenticos_intelligence::PlanStore::new(db_path)
+        .map_err(|e| format!("cannot open plan store: {e}"))?;
+
+    let planner = agenticos_intelligence::MockPlannerAgent::new();
+    let mut plan = planner
+        .create_plan(&intent)
+        .map_err(|e| format!("failed to create plan for '{}': {e}", intent.intent_type))?;
+
+    // Override the auto-generated PlanId with a DB-backed persistent ID
+    plan.id = plan_store.generate_id();
+
+    plan_store.insert(&plan)?;
+
+    println!("Plan: {}", plan.id);
+    println!("Intent: {} ({})", intent.id, intent.intent_type);
+    println!("Status: {}", plan.status);
+    println!("Steps:");
+    for step in &plan.steps {
+        println!("  {}. {}", step.order, step.action);
+        for (k, v) in &step.parameters {
+            println!("     {}: {}", k, v);
+        }
+    }
+
+    // Persist to trace store
+    let _ = persist_plan_to_trace_store(conn, &plan);
+
+    Ok(())
+}
+
+fn persist_plan_to_trace_store(
+    conn: &Connection,
+    plan: &agenticos_domain::TaskPlan,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let json = serde_json::to_string(plan)?;
+    conn.execute(
+        "INSERT INTO traces (message_id, trace_id, causation_id, topic, timestamp, payload_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            plan.id.as_str(),
+            "plan-cli",
+            Option::<String>::None,
+            format!("plans.{}", plan.status),
+            plan.timestamp,
+            json,
+        ],
+    )?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Execute (Full Governance Pipeline)
+// ---------------------------------------------------------------------------
+
+fn cmd_execute(conn: &Connection, plan_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use agenticos_domain::{AgentId, Decision};
+    use agenticos_intelligence::{ActionGraphBuilder, StaticToolRegistry, ToolResolver};
+    use agenticos_agents::ActionProposalAgent;
+    use agenticos_policy::{ActionProposalPolicy, DefaultActionProposalPolicy};
+        use agenticos_safety::SafetyActionValidator;
+    use agenticos_executor::{DefaultActionExecutor, ApprovedActionExecutor};
+
+    // Step 1: Load the plan from trace store
+    println!("=== Execute Pipeline ===");
+    println!();
+
+    let payload_json: String = conn
+        .query_row(
+            "SELECT payload_json FROM traces WHERE message_id = ?1 AND topic LIKE 'plans.%' ORDER BY rowid DESC LIMIT 1",
+            rusqlite::params![plan_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| format!("plan '{}' not found in trace store", plan_id))?;
+
+    let plan: agenticos_domain::TaskPlan =
+        serde_json::from_str(&payload_json)
+            .map_err(|e| format!("failed to deserialize plan '{}': {e}", plan_id))?;
+
+    println!("Plan: {} ({} steps)", plan.id, plan.steps.len());
+    println!("Status: {}", plan.status);
+    println!();
+
+    // Step 2: Build ActionGraph
+    let registry = StaticToolRegistry::new();
+    let resolver = ToolResolver::new(Box::new(registry));
+    let builder = ActionGraphBuilder::new(resolver);
+    let graph = builder
+        .build(&plan)
+        .ok_or_else(|| format!("plan '{}' has no steps", plan_id))?;
+
+    println!("Action Graph: {} nodes, {} edges", graph.node_count(), graph.edge_count());
+    println!();
+
+    // Step 3: Create Proposals
+    let proposal_agent = ActionProposalAgent::new(AgentId::from("action-proposal-agent"));
+    let proposals = proposal_agent.propose(&graph);
+
+    println!("Proposals created: {}", proposals.len());
+    for prop in &proposals {
+        let kind_str = format!("{:?}", prop.requested_action.kind);
+        println!("  Proposal {}: {} (safety={:?})",
+            prop.id, kind_str, prop.requested_action.safety_level);
+    }
+    println!();
+
+    // Step 4: Policy Evaluation
+    let policy = DefaultActionProposalPolicy::default();
+    let safety_validator = SafetyActionValidator::default();
+    let executor = DefaultActionExecutor::new();
+    let mut approved_proposals: Vec<(Decision, agenticos_domain::Proposal)> = Vec::new();
+    let mut executor_call_count: u64 = 0;
+    let mut action_results: Vec<(String, bool)> = Vec::new(); // (action_id, was_executed)
+
+    println!("--- Governance Results ---");
+    println!();
+
+    for proposal in &proposals {
+        let kind_str = format!("{:?}", proposal.requested_action.kind);
+        let action_label = proposal.id.as_str().split('-').next().unwrap_or("?");
+
+        let policy_ok = match policy.check(&proposal.requested_action) {
+            Ok(true) => {
+                println!("  Action {}: Policy ALLOW", action_label);
+                println!("           Kind: {}", kind_str);
+                // Create a synthetic approved decision
+                let decision = Decision {
+                    id: agenticos_domain::DecisionId::new(),
+                    proposal_id: proposal.id.clone(),
+                    decided_at: now_utc(),
+                    decided_by: AgentId::from("action-proposal-policy"),
+                    outcome: agenticos_domain::DecisionOutcome::Approved,
+                    explanation: "allowed by action proposal policy".into(),
+                };
+                approved_proposals.push((decision, proposal.clone()));
+                true
+            }
+            Ok(false) => {
+                let reason = policy.explain_denial(&proposal.requested_action);
+                println!("  Action {}: Policy DENY — {}", action_label, reason);
+                println!("           Kind: {}", kind_str);
+                println!("           Executor SKIPPED");
+                action_results.push((proposal.id.as_str().to_string(), false));
+                false
+            }
+            Err(e) => {
+                println!("  Action {}: Policy ERROR — {e}", action_label);
+                println!("           Executor SKIPPED");
+                action_results.push((proposal.id.as_str().to_string(), false));
+                false
+            }
+        };
+
+        if policy_ok {
+            // Step 5: Safety Validation
+            match safety_validator.validate(&proposal.requested_action) {
+                Ok(()) => {
+                    println!("           Safety ALLOW");
+                    // Step 6: Execution (only if both policy and safety pass)
+                    let decision = &approved_proposals.last().unwrap().0;
+                    let approved_action = agenticos_domain::ApprovedAction {
+                        request: proposal.requested_action.clone(),
+                        decision_id: decision.id.clone(),
+                    };
+                    match executor.execute(approved_action) {
+                        Ok(result) => {
+                            println!("           Executor CALLED — {} ({:?}, {}ms)",
+                                result.message, result.status, result.duration_ms);
+                            if let Some(token) = &result.rollback {
+                                println!("             rollback token: {}", token.token);
+                            }
+                            executor_call_count += 1;
+                            action_results.push((proposal.id.as_str().to_string(), true));
+
+                            // Persist executor result trace for audit
+                            let _ = conn.execute(
+                                "INSERT INTO traces (message_id, trace_id, causation_id, topic, timestamp, payload_json)
+                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                rusqlite::params![
+                                    proposal.id.as_str(),
+                                    "execute-cli",
+                                    Some(plan.id.as_str()),
+                                    "executor.called",
+                                    now_utc(),
+                                    serde_json::to_string(&result).unwrap_or_default(),
+                                ],
+                            );
+                        }
+                        Err(e) => {
+                            println!("           Executor CALLED — FAILED: {e}");
+                            executor_call_count += 1;
+                            action_results.push((proposal.id.as_str().to_string(), true));
+
+                            // Persist executor failure trace
+                            let _ = conn.execute(
+                                "INSERT INTO traces (message_id, trace_id, causation_id, topic, timestamp, payload_json)
+                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                rusqlite::params![
+                                    proposal.id.as_str(),
+                                    "execute-cli",
+                                    Some(plan.id.as_str()),
+                                    "executor.called",
+                                    now_utc(),
+                                    format!("{{\"error\":\"{e}\"}}"),
+                                ],
+                            );
+                        }
+                    }
+                }
+                Err(reason) => {
+                    println!("           Safety VETO — {reason}");
+                    println!("           Executor SKIPPED");
+                    action_results.push((proposal.id.as_str().to_string(), false));
+                }
+            }
+        }
+        println!();
+    }
+
+    println!("--- Summary ---");
+    println!("  Total actions: {}", proposals.len());
+    println!("  Policy ALLOW:  {}", approved_proposals.len());
+    println!("  Executor calls: {}", executor_call_count);
+    if executor_call_count == 0 && proposals.len() > 0 {
+        println!("  Guard: Actions blocked by governance — executor never called.");
+    }
+    println!();
+    println!("Pipeline complete.");
+
+    // Persist execution trace
+    {
+        let json = serde_json::to_string(&graph)?;
+        conn.execute(
+            "INSERT INTO traces (message_id, trace_id, causation_id, topic, timestamp, payload_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                plan.id.as_str(),
+                "execute-cli",
+                Option::<String>::None,
+                format!("execute.{}", plan.status),
+                plan.timestamp,
+                json,
+            ],
+        )?;
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Plans (List all stored plans)
+// ---------------------------------------------------------------------------
+
+fn cmd_intents(_conn: &Connection, db_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let store = agenticos_intelligence::IntentStore::new(db_path)
+        .map_err(|e| format!("cannot open intent store: {e}"))?;
+
+    let intents = store.list()?;
+
+    if intents.is_empty() {
+        println!("No intents found.");
+        return Ok(());
+    }
+
+    println!("{:<12} {:<16} {:<8} TEXT", "INTENT ID", "TYPE", "CONFIDENCE");
+    println!("{:-<12} {:-<16} {:-<8} {:-<20}", "-", "-", "-", "-");
+    for intent in &intents {
+        let text = if intent.source_text.len() > 20 {
+            format!("{}...", &intent.source_text[..17])
+        } else {
+            intent.source_text.clone()
+        };
+        println!(
+            "{:<12} {:<16} {:<8.2} {}",
+            intent.id.as_str(),
+            intent.intent_type,
+            intent.confidence,
+            text,
+        );
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct PlanSummaryRow {
+    plan_id: String,
+    intent_id: String,
+    intent_type: String,
+    status: String,
+}
+
+fn cmd_plans(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let mut stmt = conn.prepare(
+        "SELECT message_id, payload_json FROM traces WHERE topic LIKE 'plans.%' ORDER BY rowid DESC"
+    )?;
+
+    let mut rows: Vec<PlanSummaryRow> = Vec::new();
+    for result in stmt.query_map([], |row| {
+        let mid: String = row.get(0)?;
+        let payload: String = row.get(1)?;
+        Ok((mid, payload))
+    })? {
+        let (plan_id, payload_json) = result?;
+        let plan: agenticos_domain::TaskPlan = match serde_json::from_str(&payload_json) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        // Look up the intent type from intents trace by matching intent ID
+        let intent_type: String = conn
+            .query_row(
+                "SELECT topic FROM traces WHERE message_id = ?1 AND topic LIKE 'intents.%' ORDER BY rowid DESC LIMIT 1",
+                rusqlite::params![plan.source_intent_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap_or_else(|_| "intents.unknown".into());
+
+        // Extract the type part after "intents."
+        let itype = intent_type.strip_prefix("intents.").unwrap_or("unknown").to_string();
+
+        rows.push(PlanSummaryRow {
+            plan_id,
+            intent_id: plan.source_intent_id.as_str().to_string(),
+            intent_type: itype,
+            status: plan.status,
+        });
+    }
+
+    if rows.is_empty() {
+        println!("No plans found.");
+        return Ok(());
+    }
+
+    print_output(&rows, &["PLAN ID", "INTENT ID", "INTENT TYPE", "STATUS"],
+        |r| vec![r.plan_id.clone(), r.intent_id.clone(), r.intent_type.clone(), r.status.clone()],
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Plan Show (Read-only plan inspection)
+// ---------------------------------------------------------------------------
+
+fn cmd_plan_show(conn: &Connection, plan_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let payload_json: String = conn
+        .query_row(
+            "SELECT payload_json FROM traces WHERE message_id = ?1 AND topic LIKE 'plans.%' ORDER BY rowid DESC LIMIT 1",
+            rusqlite::params![plan_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| format!("plan '{}' not found in trace store", plan_id))?;
+
+    let plan: agenticos_domain::TaskPlan =
+        serde_json::from_str(&payload_json)
+            .map_err(|e| format!("failed to deserialize plan '{}': {e}", plan_id))?;
+
+    // Look up source intent
+    let intent_type: String = conn
+        .query_row(
+            "SELECT topic FROM traces WHERE message_id = ?1 AND topic LIKE 'intents.%' ORDER BY rowid DESC LIMIT 1",
+            rusqlite::params![plan.source_intent_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap_or_else(|_| "intents.unknown".into());
+    let itype = intent_type.strip_prefix("intents.").unwrap_or("unknown");
+
+    println!("Plan: {}", plan.id);
+    println!("Source Intent: {} ({})", plan.source_intent_id, itype);
+    println!("Status: {}", plan.status);
+    println!("Timestamp: {}", plan.timestamp);
+    println!("Steps: {}", plan.steps.len());
+    println!();
+    for step in &plan.steps {
+        println!("  {}. {}", step.order, step.action);
+        if !step.parameters.is_empty() {
+            let mut keys: Vec<&String> = step.parameters.keys().collect();
+            keys.sort();
+            for key in keys {
+                println!("     {}: {}", key, step.parameters[key]);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Execute by Intent ID (avoids plan selection errors)
+// ---------------------------------------------------------------------------
+
+fn cmd_execute_intent(conn: &Connection, intent_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: Verify the intent exists
+    let _payload_json: String = conn
+        .query_row(
+            "SELECT payload_json FROM traces WHERE message_id = ?1 AND topic LIKE 'intents.%' ORDER BY rowid DESC LIMIT 1",
+            rusqlite::params![intent_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| format!("intent '{}' not found in trace store", intent_id))?;
+
+    // Step 2: Find the plan bound to this intent
+    let plan_id: String = conn
+        .query_row(
+            "SELECT message_id FROM traces WHERE message_id IN (SELECT message_id FROM traces WHERE topic LIKE 'plans.%') AND payload_json LIKE ?1 ORDER BY rowid DESC LIMIT 1",
+            rusqlite::params![format!("%\"source_intent_id\":\"{}\"%", intent_id)],
+            |row| row.get(0),
+        )
+        .map_err(|_| format!("no plan found for intent '{}'", intent_id))?;
+
+    println!("Intent: {}", intent_id);
+    println!("Plan: {}", plan_id);
+    println!();
+
+    // Step 3: Execute the plan
+    cmd_execute(conn, &plan_id)
+}
+
+fn now_utc() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => format!("{}.{:09}Z", d.as_secs(), d.subsec_nanos()),
+        Err(_) => "0.000000000Z".to_owned(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Actions (Action Graph)
+// ---------------------------------------------------------------------------
+
+fn cmd_actions(conn: &Connection, plan_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use agenticos_intelligence::{ActionGraphBuilder, StaticToolRegistry, ToolResolver};
+
+    // Load the plan from the trace store
+    let payload_json: String = conn
+        .query_row(
+            "SELECT payload_json FROM traces WHERE message_id = ?1 AND topic LIKE 'plans.%' ORDER BY rowid DESC LIMIT 1",
+            rusqlite::params![plan_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| format!("plan '{}' not found in trace store", plan_id))?;
+
+    let plan: agenticos_domain::TaskPlan =
+        serde_json::from_str(&payload_json)
+            .map_err(|e| format!("failed to deserialize plan '{}': {e}", plan_id))?;
+
+    // Build action graph from plan
+    let registry = StaticToolRegistry::new();
+    let resolver = ToolResolver::new(Box::new(registry));
+    let builder = ActionGraphBuilder::new(resolver);
+    let graph = builder
+        .build(&plan)
+        .ok_or_else(|| format!("plan '{}' has no steps — cannot build action graph", plan_id))?;
+
+    // Store the action graph
+    let action_store = agenticos_intelligence::ActionStore::new(":memory:")
+        .map_err(|e| format!("cannot open action store: {e}"))?;
+    action_store.insert(&graph)?;
+
+    // Display the graph
+    println!("Action Graph for Plan: {}", plan.id);
+    println!("Source Intent: {}", plan.source_intent_id);
+    println!("Nodes: {}  Edges: {}", graph.node_count(), graph.edge_count());
+    println!();
+
+    for node in &graph.nodes {
+        let kind_str = format!("{:?}", node.kind);
+        let status_str = format!("{:?}", node.status);
+        let tool_str = node.metadata.tool.as_deref().unwrap_or("none");
+        let cap_str = node.metadata.capability.as_deref().unwrap_or("none");
+        println!("  Action {} [step {}]", node.id, node.metadata.source_step);
+        println!("    kind:     {}", kind_str);
+        println!("    status:   {}", status_str);
+        println!("    tool:     {}", tool_str);
+        println!("    cap:      {}", cap_str);
+
+        // Show parameters
+        if !node.params.is_empty() {
+            println!("    params:");
+            let mut keys: Vec<&String> = node.params.keys().collect();
+            keys.sort();
+            for key in keys {
+                println!("      {}: {}", key, node.params[key]);
+            }
+        }
+
+        // Show dependencies
+        let prereqs: Vec<&agenticos_domain::ActionNode> = graph.prerequisites_of(&node.id);
+        if !prereqs.is_empty() {
+            println!("    depends_on:");
+            for p in &prereqs {
+                println!("      {} (step {})", p.id, p.metadata.source_step);
+            }
+        }
+
+        println!();
+    }
+
+    // Show edges
+    if !graph.edges.is_empty() {
+        println!("  Dependency Edges:");
+        for edge in &graph.edges {
+            println!(
+                "    {} → {} : {}",
+                edge.prerequisite_id, edge.dependent_id, edge.reason
+            );
+        }
+        println!();
+    }
+
+    // Persist the action graph to the trace store
+    {
+        let json = serde_json::to_string(&graph)?;
+        conn.execute(
+            "INSERT INTO traces (message_id, trace_id, causation_id, topic, timestamp, payload_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                plan.id.as_str(),
+                "actions-cli",
+                Option::<String>::None,
+                format!("actions.{}", plan.status),
+                plan.timestamp,
+                json,
+            ],
+        )?;
+    }
+
+    Ok(())
+}
+
+fn persist_intent_to_trace_store(
+    conn: &Connection,
+    intent: &agenticos_domain::Intent,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let json = serde_json::to_string(intent)?;
+    conn.execute(
+        "INSERT INTO traces (message_id, trace_id, causation_id, topic, timestamp, payload_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            intent.id.as_str(),
+            "intent-cli",
+            Option::<String>::None,
+            format!("intents.{}", intent.intent_type),
+            intent.timestamp,
+            json,
+        ],
+    )?;
     Ok(())
 }
 
@@ -1420,6 +2394,1669 @@ mod tests {
         insert_trace_event(&conn, "tick-1", "observations.memory", "obs", "ts3");
         insert_trace_event(&conn, "tick-1", "decisions.memory-agent", "dec", "ts4");
         assert!(cmd_health(&conn).is_ok());
+    }
+
+    // ---------------------------------------------------------------
+    // Ask (Intent Parsing)
+    // ---------------------------------------------------------------
+    #[test]
+    fn test_ask_with_launch_intent() {
+        let conn = create_test_db();
+        assert!(test_cmd_ask(&conn, "Open VS Code").is_ok());
+        // Verify the intent was persisted to the trace store
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'intents.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert!(
+            count > 0,
+            "expected at least one intent trace, got {}",
+            count
+        );
+        // Verify intent type in the payload
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'intents.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        assert!(
+            payload.contains("launch_application"),
+            "expected launch_application in payload, got: {payload}"
+        );
+        assert!(
+            payload.contains("vscode"),
+            "expected vscode in payload, got: {payload}"
+        );
+    }
+
+    #[test]
+    fn test_ask_with_create_project_intent() {
+        let conn = create_test_db();
+        assert!(test_cmd_ask(&conn, "Create a Next.js project").is_ok());
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'intents.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert!(count > 0, "expected at least one intent trace");
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'intents.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        assert!(
+            payload.contains("create_project"),
+            "expected create_project in payload, got: {payload}"
+        );
+    }
+
+    #[test]
+    fn test_ask_no_tokio_panic_with_mock_parser() {
+        // Explicitly verify no Tokio panic occurs when using MockIntentParser
+        // (GeminiIntentParser would require #[tokio::test], but MockIntentParser
+        // is synchronous and works in a regular #[test].)
+        let conn = create_test_db();
+        // Unset GEMINI_API_KEY to force MockIntentParser
+        std::env::remove_var("GEMINI_API_KEY");
+        let result = test_cmd_ask(&conn, "What time is it?");
+        assert!(result.is_ok(), "cmd_ask should not panic: {result:?}");
+    }
+
+    // ---------------------------------------------------------------
+    // Plan (intent_id-based)
+    // ---------------------------------------------------------------
+
+    // Test helpers that use in-memory DB for the subsidiary stores
+    fn test_cmd_ask(conn: &Connection, text: &str) -> Result<(), Box<dyn std::error::Error>> {
+        cmd_ask(conn, ":memory:", text)
+    }
+
+    fn test_cmd_plan(conn: &Connection, intent_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+        cmd_plan(conn, ":memory:", intent_id)
+    }
+
+    fn ask_and_get_id(conn: &Connection, text: &str) -> String {
+        test_cmd_ask(conn, text).unwrap();
+        conn.query_row(
+            "SELECT message_id FROM traces WHERE topic LIKE 'intents.%' ORDER BY rowid DESC LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_plan_with_launch_intent() {
+        let conn = create_test_db();
+        let intent_id = ask_and_get_id(&conn, "Open VS Code");
+        assert!(test_cmd_plan(&conn, &intent_id).is_ok());
+        // Verify plan persisted to trace store
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'plans.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert!(count > 0, "expected at least one plan trace, got {count}");
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'plans.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        assert!(payload.contains("launch_application"), "expected launch_application step in payload");
+    }
+
+    #[test]
+    fn test_plan_with_firefox_and_github() {
+        let conn = create_test_db();
+        let intent_id = ask_and_get_id(&conn, "Open Firefox and go to github.com");
+        assert!(test_cmd_plan(&conn, &intent_id).is_ok());
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'plans.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        // Should have two steps
+        assert!(payload.contains("launch_application"), "expected launch_application step");
+        assert!(payload.contains("open_url"), "expected open_url step");
+        assert!(payload.contains("firefox"), "expected firefox app");
+        assert!(payload.contains("github.com"), "expected github url");
+    }
+
+    #[test]
+    fn test_plan_with_create_project() {
+        let conn = create_test_db();
+        let intent_id = ask_and_get_id(&conn, "Create Next.js project called examgenius");
+        assert!(test_cmd_plan(&conn, &intent_id).is_ok());
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'plans.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        // Should have two steps: create_directory + initialize_project
+        assert!(payload.contains("create_directory"), "expected create_directory step");
+        assert!(payload.contains("initialize_project"), "expected initialize_project step");
+        assert!(payload.contains("examgenius"), "expected examgenius project name");
+        assert!(payload.contains("nextjs"), "expected nextjs framework");
+    }
+
+    #[test]
+    fn test_plan_unsupported_intent_returns_error() {
+        let conn = create_test_db();
+        let intent_id = ask_and_get_id(&conn, "How is the weather?");
+        let result = test_cmd_plan(&conn, &intent_id);
+        assert!(result.is_err(), "unknown intent should produce plan error");
+    }
+
+    #[test]
+    fn test_ask_intent_persisted_correctly() {
+        let conn = create_test_db();
+        test_cmd_ask(&conn, "Open Firefox").unwrap();
+        // Read back the full payload to verify all fields
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'intents.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let v: serde_json::Value = serde_json::from_str(&payload).unwrap_or_default();
+        let obj = v.as_object().unwrap();
+        assert!(obj.contains_key("id"));
+        assert!(obj.contains_key("source_text"));
+        assert!(obj.contains_key("intent_type"));
+        assert!(obj.contains_key("parameters"));
+        assert!(obj.contains_key("confidence"));
+        assert!(obj.contains_key("timestamp"));
+        assert_eq!(
+            obj.get("intent_type").and_then(|v| v.as_str()),
+            Some("launch_application")
+        );
+        assert_eq!(
+            obj.get("source_text").and_then(|v| v.as_str()),
+            Some("Open Firefox")
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Ask → Plan Integration
+    // ---------------------------------------------------------------
+    #[test]
+    fn test_ask_then_plan_open_vscode() {
+        let conn = create_test_db();
+        let intent_id = ask_and_get_id(&conn, "Open VS Code");
+        // Verify intent was stored correctly
+        let intent_json: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE message_id = ?1",
+                rusqlite::params![intent_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        assert!(intent_json.contains("launch_application"), "intent should be launch_application");
+        // Now plan from that intent
+        assert!(test_cmd_plan(&conn, &intent_id).is_ok(), "plan should succeed");
+        // Verify plan was created and stored
+        let plan_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'plans.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(plan_count, 1, "should have exactly one plan trace");
+        let plan_json: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'plans.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        assert!(plan_json.contains("launch_application"), "plan should contain launch_application step");
+        assert!(plan_json.contains("vscode"), "plan should contain vscode");
+    }
+
+    #[test]
+    fn test_ask_then_plan_firefox_and_github() {
+        let conn = create_test_db();
+        let intent_id = ask_and_get_id(&conn, "Open Firefox and go to github.com");
+        // Verify the intent has both app and url parameters
+        let intent_json: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE message_id = ?1",
+                rusqlite::params![intent_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        assert!(intent_json.contains("launch_application"), "intent should be launch_application");
+        // Now plan from that intent
+        assert!(test_cmd_plan(&conn, &intent_id).is_ok(), "plan should succeed");
+        // Verify plan has two steps
+        let plan_json: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'plans.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        assert!(plan_json.contains("launch_application"), "plan should contain launch_application");
+        assert!(plan_json.contains("open_url"), "plan should contain open_url");
+        assert!(plan_json.contains("firefox"), "plan should reference firefox");
+        assert!(plan_json.contains("github.com"), "plan should reference github.com");
+        // Verify two steps
+        let plan: agenticos_domain::TaskPlan = serde_json::from_str(&plan_json).unwrap();
+        assert_eq!(plan.steps.len(), 2, "should be exactly 2 steps");
+        assert_eq!(plan.steps[0].action, "launch_application");
+        assert_eq!(plan.steps[1].action, "open_url");
+    }
+
+    // ---------------------------------------------------------------
+    // Actions (Action Graph)
+    // ---------------------------------------------------------------
+
+    fn ask_and_plan(conn: &Connection, text: &str) -> String {
+        let intent_id = ask_and_get_id(conn, text);
+        test_cmd_plan(conn, &intent_id).unwrap();
+        conn.query_row(
+            "SELECT message_id FROM traces WHERE topic LIKE 'plans.%' ORDER BY rowid DESC LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_actions_shows_graph_for_launch_plan() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        // Verify action graph persisted to trace store
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'actions.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert!(count > 0, "expected at least one action trace, got {count}");
+    }
+
+    #[test]
+    fn test_actions_with_two_step_plan() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open Firefox and go to github.com");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        // Verify action graph has 2 nodes
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        assert_eq!(graph.node_count(), 2, "expected 2 action nodes");
+        assert_eq!(graph.edge_count(), 1, "expected 1 dependency edge");
+    }
+
+    #[test]
+    fn test_actions_with_create_project() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Create Next.js project called examgenius");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        assert_eq!(graph.node_count(), 2);
+        // First node should be CreateDirectory
+        match &graph.nodes[0].kind {
+            agenticos_domain::ActionKind::CreateDirectory { path } => {
+                assert_eq!(path, "examgenius");
+            }
+            other => panic!("expected CreateDirectory, got {:?}", other),
+        }
+        // Second node should be CreateProjectWorkspace
+        match &graph.nodes[1].kind {
+            agenticos_domain::ActionKind::CreateProjectWorkspace {
+                project_name,
+                framework,
+            } => {
+                assert_eq!(project_name, "examgenius");
+                assert_eq!(framework, "nextjs");
+            }
+            other => panic!("expected CreateProjectWorkspace, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_actions_nonexistent_plan_returns_error() {
+        let conn = create_test_db();
+        let result = cmd_actions(&conn, "PlanId-999");
+        assert!(result.is_err(), "should error for missing plan");
+    }
+
+    #[test]
+    fn test_actions_asks_plan_actions_integration() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open Firefox and go to github.com");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        // Check the full chain: intent → plan → action graph
+        let action_payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&action_payload).unwrap();
+        assert_eq!(graph.source_plan_id.as_str(), plan_id);
+        // Verify node kinds
+        match &graph.nodes[0].kind {
+            agenticos_domain::ActionKind::LaunchApplication { application } => {
+                assert_eq!(application, "firefox");
+            }
+            other => panic!("expected LaunchApplication, got {:?}", other),
+        }
+        match &graph.nodes[1].kind {
+            agenticos_domain::ActionKind::OpenUrl { url } => {
+                assert_eq!(url, "https://github.com");
+            }
+            other => panic!("expected OpenUrl, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_actions_ask_then_plan_then_actions_create_project() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Create Next.js project called examgenius");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        let action_payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&action_payload).unwrap();
+        assert_eq!(graph.node_count(), 2);
+        assert_eq!(graph.edges.len(), 1);
+        // Verify tool resolution in metadata
+        assert_eq!(graph.nodes[0].metadata.tool.as_deref(), Some("filesystem"));
+    }
+
+    #[test]
+    fn test_actions_actions_payload_is_valid_action_graph() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        cmd_actions(&conn, &plan_id).unwrap();
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        // Each node must have required fields
+        for node in &graph.nodes {
+            assert!(!node.id.as_str().is_empty(), "node id must not be empty");
+            assert!(
+                node.metadata.source_step > 0,
+                "source_step must be > 0"
+            );
+        }
+    }
+
+    #[test]
+    fn test_actions_then_plan_actions_integration() {
+        let conn = create_test_db();
+        // Open VS Code → plan → actions
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        // Verify action graph nodes have correct tool resolution
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        // VS Code should resolve to tool "vscode" via StaticToolRegistry
+        assert_eq!(graph.nodes[0].metadata.tool.as_deref(), Some("vscode"));
+    }
+
+    #[test]
+    fn test_actions_then_plan_two_step_integration() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open Firefox and go to github.com");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        // Firefox → tool "firefox", open_url → tool "browser"
+        assert_eq!(graph.nodes[0].metadata.tool.as_deref(), Some("firefox"));
+        assert_eq!(graph.nodes[1].metadata.tool.as_deref(), Some("browser"));
+        // Dependency edge should exist
+        assert_eq!(graph.edges[0].prerequisite_id, graph.nodes[0].id);
+        assert_eq!(graph.edges[0].dependent_id, graph.nodes[1].id);
+    }
+
+    #[test]
+    fn test_actions_then_plan_create_project_integration() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Create Next.js project called examgenius");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        // create_directory → tool "filesystem", initialize_project → tool (none for project workspace)
+        assert_eq!(graph.nodes[0].metadata.tool.as_deref(), Some("filesystem"));
+        // verify params are preserved through the pipeline
+        assert_eq!(
+            graph.nodes[0].params.get("path").unwrap(),
+            "examgenius"
+        );
+        assert_eq!(
+            graph.nodes[1].params.get("project_name").unwrap(),
+            "examgenius"
+        );
+        assert_eq!(
+            graph.nodes[1].params.get("framework").unwrap(),
+            "nextjs"
+        );
+    }
+
+    #[test]
+    fn test_actions_then_plan_invalid_plan_id() {
+        let conn = create_test_db();
+        let result = cmd_actions(&conn, "nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_actions_then_plan_actions_empty_plan() {
+        let conn = create_test_db();
+        // First create an intent
+        let intent_id = ask_and_get_id(&conn, "How is the weather?");
+        // This will fail because "unknown" intent type is not supported by MockPlannerAgent
+        let plan_result = test_cmd_plan(&conn, &intent_id);
+        assert!(plan_result.is_err(), "unknown intent should fail planning");
+        // actions on a nonexistent plan should fail too
+        let result = cmd_actions(&conn, "PlanId-999");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_actions_then_plan_then_actions_then_plan() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        // Second plan + actions
+        let plan_id2 = ask_and_plan(&conn, "Open Firefox");
+        assert!(cmd_actions(&conn, &plan_id2).is_ok());
+        // Both action graphs should be stored
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'actions.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(count, 2, "expected exactly 2 action traces");
+    }
+
+    #[test]
+    fn test_actions_then_plan_actions_integration_full_pipeline() {
+        let conn = create_test_db();
+        // Full pipeline: ask → plan → actions
+        let plan_id = ask_and_plan(&conn, "Open Firefox and go to github.com");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        // Verify all three traces exist
+        let intent_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'intents.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let plan_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'plans.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let action_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'actions.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(intent_count, 1, "expected 1 intent trace");
+        assert_eq!(plan_count, 1, "expected 1 plan trace");
+        assert_eq!(action_count, 1, "expected 1 action trace");
+    }
+
+    #[test]
+    fn test_actions_create_project_then_plan_integration_full() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Create Next.js project called examgenius");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        // Validate all 3 traces
+        let intent_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'intents.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let plan_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'plans.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let action_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'actions.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(intent_count, 1, "intent count");
+        assert_eq!(plan_count, 1, "plan count");
+        assert_eq!(action_count, 1, "action count");
+        assert_eq!(graph.node_count(), 2);
+        assert_eq!(graph.nodes[0].metadata.tool.as_deref(), Some("filesystem"));
+    }
+
+    #[test]
+    fn test_actions_invalid_plan_id_behavior() {
+        let conn = create_test_db();
+        // Empty plan ID
+        let result = cmd_actions(&conn, "");
+        assert!(result.is_err(), "empty plan_id should error");
+        // Malformed plan ID format (but it's just a string, so it won't error on format)
+        let result = cmd_actions(&conn, "not-a-plan-id");
+        assert!(result.is_err(), "nonexistent plan should error");
+    }
+
+    #[test]
+    fn test_actions_invalid_plan_id_format() {
+        let conn = create_test_db();
+        // PlanId with special characters
+        let result = cmd_actions(&conn, "PlanId-!!!");
+        assert!(result.is_err(), "nonexistent plan should error");
+    }
+
+    #[test]
+    fn test_actions_invalid_plan_id_empty() {
+        let conn = create_test_db();
+        let result = cmd_actions(&conn, "");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_actions_invalid_plan_id_special_chars() {
+        let conn = create_test_db();
+        let result = cmd_actions(&conn, "PlanId-@#$%");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_actions_pipeline_intent_plan_actions() {
+        let conn = create_test_db();
+        // Full pipeline
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        // Verify action graph fields
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        // Node should have LaunchApplication kind
+        assert!(matches!(
+            &graph.nodes[0].kind,
+            agenticos_domain::ActionKind::LaunchApplication { application }
+                if application == "vscode"
+        ));
+        // Metadata should reference plan and intent
+        assert_eq!(graph.source_plan_id.as_str(), plan_id);
+        assert!(graph.source_intent_id.as_str().starts_with("IntentId-"));
+    }
+
+    #[test]
+    fn test_actions_pipeline_intent_plan_actions_two_step_dependency() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open Firefox and go to github.com");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        // Dependency edge: ActionId-1 (launch) must complete before ActionId-2 (open_url)
+        assert_eq!(graph.nodes[0].metadata.source_step, 1);
+        assert_eq!(graph.nodes[1].metadata.source_step, 2);
+        assert_eq!(graph.edges[0].prerequisite_id, graph.nodes[0].id);
+        assert_eq!(graph.edges[0].dependent_id, graph.nodes[1].id);
+        assert!(graph.edges[0].reason.contains("must complete before"));
+    }
+
+    #[test]
+    fn test_actions_actions_graph_metadata_fields() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        // Check metadata fields
+        let meta = &graph.nodes[0].metadata;
+        assert_eq!(meta.source_step, 1);
+        assert_eq!(meta.source_plan_id.as_str(), plan_id);
+        assert!(!meta.source_intent_id.as_str().is_empty());
+        assert_eq!(meta.tool.as_deref(), Some("vscode"));
+        assert_eq!(meta.capability.as_deref(), Some("launch_application"));
+    }
+
+    #[test]
+    fn test_actions_actions_graph_create_project_integration() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Create Next.js project called examgenius");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        // Verify all node metadata for create project
+        assert_eq!(graph.nodes[0].metadata.source_step, 1);
+        assert_eq!(graph.nodes[0].metadata.tool.as_deref(), Some("filesystem"));
+        assert_eq!(
+            graph.nodes[0].metadata.capability.as_deref(),
+            Some("create_directory")
+        );
+        assert_eq!(graph.nodes[1].metadata.source_step, 2);
+        assert_eq!(graph.nodes[1].metadata.capability.as_deref(), Some("initialize_project"));
+    }
+
+    #[test]
+    fn test_actions_actions_graph_then_plan_actions_integration_complete() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open Firefox and go to github.com");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        // Validate full metadata
+        for node in &graph.nodes {
+            assert!(node.metadata.source_step >= 1);
+            assert_eq!(node.metadata.source_plan_id.as_str(), plan_id);
+            assert!(node.metadata.source_intent_id.as_str().starts_with("IntentId-"));
+        }
+        // Validate edges
+        for edge in &graph.edges {
+            assert!(!edge.prerequisite_id.as_str().is_empty());
+            assert!(!edge.dependent_id.as_str().is_empty());
+            assert!(!edge.reason.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_actions_actions_graph_then_plan_integration_full() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        assert_eq!(graph.source_plan_id.as_str(), plan_id);
+        assert_eq!(graph.node_count(), 1, "VS Code plan should have 1 action");
+        // Verify content
+        match &graph.nodes[0].kind {
+            agenticos_domain::ActionKind::LaunchApplication { application } => {
+                assert_eq!(application, "vscode");
+            }
+            other => panic!("expected LaunchApplication, got {:?}", other),
+        }
+        assert_eq!(graph.nodes[0].metadata.tool.as_deref(), Some("vscode"));
+    }
+
+    #[test]
+    fn test_actions_actions_graph_empty_plan_id_then_plan_actions() {
+        let conn = create_test_db();
+        // Empty plan ID
+        let result = cmd_actions(&conn, "");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_actions_actions_graph_plan_id_format_then_plan_actions() {
+        let conn = create_test_db();
+        let result = cmd_actions(&conn, "PlanId-abc");
+        assert!(result.is_err(), "nonexistent plan should error");
+    }
+
+    #[test]
+    fn test_actions_actions_graph_then_plan_actions_integration() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open Firefox and go to github.com");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        // Check dependency chain
+        assert_eq!(graph.nodes[0].metadata.source_step, 1);
+        assert_eq!(graph.nodes[1].metadata.source_step, 2);
+        assert_eq!(graph.edges[0].prerequisite_id, graph.nodes[0].id);
+        assert_eq!(graph.edges[0].dependent_id, graph.nodes[1].id);
+    }
+
+    #[test]
+    fn test_actions_actions_graph_then_plan_integration() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        // Check edge is absent (single node)
+        assert_eq!(graph.edge_count(), 0);
+        // Check tool is correctly resolved
+        assert_eq!(graph.nodes[0].metadata.tool.as_deref(), Some("vscode"));
+    }
+
+    #[test]
+    fn test_actions_create_project_then_plan_integration() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Create Next.js project called examgenius");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        assert_eq!(graph.node_count(), 2);
+        assert_eq!(graph.nodes[0].metadata.tool.as_deref(), Some("filesystem"));
+    }
+
+    #[test]
+    fn test_actions_create_project_then_plan_actions_integration_full() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Create Next.js project called examgenius");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'actions.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        assert_eq!(graph.node_count(), 2);
+        assert_eq!(graph.nodes[0].metadata.tool.as_deref(), Some("filesystem"));
+        assert_eq!(graph.nodes[0].params.get("path").unwrap(), "examgenius");
+        assert_eq!(graph.nodes[1].params.get("project_name").unwrap(), "examgenius");
+        assert_eq!(graph.nodes[1].params.get("framework").unwrap(), "nextjs");
+    }
+
+    #[test]
+    fn test_actions_actions_graph_then_plan_actions_integration_complete_full_pipeline() {
+        let conn = create_test_db();
+        // Full pipeline: ask → plan → actions
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_actions(&conn, &plan_id).is_ok());
+        // Verify all 3 traces
+        let intent_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'intents.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let plan_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'plans.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let action_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'actions.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(intent_count, 1, "intent");
+        assert_eq!(plan_count, 1, "plan");
+        assert_eq!(action_count, 1, "action");
+    }
+
+    // ---------------------------------------------------------------
+    // Execute (Full Governance Pipeline)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_execute_single_step_launch() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        // Verify execution trace was persisted
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'execute.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(count, 1, "expected 1 execute trace");
+    }
+
+    #[test]
+    fn test_execute_two_step_plan() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open Firefox and go to github.com");
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        // Both steps should be executed
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'execute.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(count, 1);
+        // Verify the execute trace payload contains action graph
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE topic LIKE 'execute.%' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let graph: agenticos_domain::ActionGraph =
+            serde_json::from_str(&payload).unwrap();
+        assert_eq!(graph.node_count(), 2);
+    }
+
+    #[test]
+    fn test_execute_create_project() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Create Next.js project called examgenius");
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'execute.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_execute_nonexistent_plan_returns_error() {
+        let conn = create_test_db();
+        let result = cmd_execute(&conn, "PlanId-999");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_execute_full_pipeline_persists_trace() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        // Verify all traces: intent, plan, action, execute
+        let intent_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'intents.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let plan_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'plans.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let execute_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'execute.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(intent_count, 1, "intent");
+        assert_eq!(plan_count, 1, "plan");
+        assert_eq!(execute_count, 1, "execute");
+    }
+
+    #[test]
+    fn test_execute_then_ask_then_plan_then_execute() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        // Second plan + execute
+        let plan_id2 = ask_and_plan(&conn, "Open Firefox");
+        assert!(cmd_execute(&conn, &plan_id2).is_ok());
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'execute.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(count, 2, "expected 2 execute traces");
+    }
+
+    #[test]
+    fn test_execute_then_plan_then_actions_integration() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open Firefox and go to github.com");
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        // Verify the pipeline ran successfully
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'execute.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_execute_then_plan_then_actions_integration_create_project() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Create Next.js project called examgenius");
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        // Verify the pipeline ran successfully
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'execute.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_execute_then_plan_then_actions_integration_single_step() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'execute.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_execute_with_unsupported_intent() {
+        let conn = create_test_db();
+        let intent_id = ask_and_get_id(&conn, "How is the weather?");
+        // Plan will fail for unsupported intent
+        let plan_result = test_cmd_plan(&conn, &intent_id);
+        assert!(plan_result.is_err(), "unknown intent should fail planning");
+        // Execute on nonexistent plan should fail
+        let result = cmd_execute(&conn, "PlanId-999");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_execute_empty_plan_id() {
+        let conn = create_test_db();
+        let result = cmd_execute(&conn, "");
+        assert!(result.is_err(), "empty plan_id should error");
+    }
+
+    #[test]
+    fn test_execute_invalid_plan_id() {
+        let conn = create_test_db();
+        let result = cmd_execute(&conn, "PlanId-!!!");
+        assert!(result.is_err(), "nonexistent plan should error");
+    }
+
+    #[test]
+    fn test_execute_full_integration_pipeline() {
+        let conn = create_test_db();
+        // Full pipeline: ask → plan → execute
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        // Verify all traces
+        let intent_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'intents.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let plan_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'plans.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let execute_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'execute.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(intent_count, 1, "intent");
+        assert_eq!(plan_count, 1, "plan");
+        assert_eq!(execute_count, 1, "execute");
+    }
+
+    #[test]
+    fn test_execute_full_integration_pipeline_two_steps() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open Firefox and go to github.com");
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        let execute_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'execute.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(execute_count, 1, "execute");
+    }
+
+    #[test]
+    fn test_execute_full_integration_pipeline_create_project() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Create Next.js project called examgenius");
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        let execute_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'execute.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(execute_count, 1, "execute");
+    }
+
+    #[test]
+    fn test_execute_pipeline_intent_plan_execute() {
+        let conn = create_test_db();
+        // Full pipeline: ask → plan → execute
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        // Verify all three traces
+        let intent_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'intents.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let plan_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'plans.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let execute_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'execute.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(intent_count, 1, "intent");
+        assert_eq!(plan_count, 1, "plan");
+        assert_eq!(execute_count, 1, "execute");
+    }
+
+    #[test]
+    fn test_execute_pipeline_intent_plan_execute_two_steps() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open Firefox and go to github.com");
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        let execute_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'execute.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(execute_count, 1, "execute");
+    }
+
+    #[test]
+    fn test_execute_pipeline_intent_plan_execute_create_project() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Create Next.js project called examgenius");
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        let execute_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'execute.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(execute_count, 1, "execute");
+    }
+
+    #[test]
+    fn test_execute_pipeline_full_integration() {
+        let conn = create_test_db();
+        // Full pipeline: ask → plan → execute
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        // Verify all traces
+        let intent_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'intents.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let plan_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'plans.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let execute_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic LIKE 'execute.%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(intent_count, 1, "intent");
+        assert_eq!(plan_count, 1, "plan");
+        assert_eq!(execute_count, 1, "execute");
+    }
+
+    // ---------------------------------------------------------------
+    // Governance Validation Tests (Task 4 — Critical Governance Fix)
+    // ---------------------------------------------------------------
+
+    /// Helper: count executor calls by checking `executor.called` traces.
+    fn get_executor_call_count(conn: &Connection) -> u64 {
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE topic = 'executor.called'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        count as u64
+    }
+
+    /// Check the plan's action kind from the trace store.
+    fn get_plan_action_kind(conn: &Connection, plan_id: &str) -> String {
+        let payload_json: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE message_id = ?1 AND topic LIKE 'plans.%' ORDER BY rowid DESC LIMIT 1",
+                rusqlite::params![plan_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        if payload_json.is_empty() {
+            return "unknown".into();
+        }
+        let plan: agenticos_domain::TaskPlan = serde_json::from_str(&payload_json).unwrap_or_else(|_| {
+            agenticos_domain::TaskPlan::new(
+                agenticos_domain::IntentId::new(),
+                vec![],
+                "error",
+            )
+        });
+        if plan.steps.is_empty() {
+            return "no_steps".into();
+        }
+        plan.steps[0].action.clone()
+    }
+
+    // Scenario A: "Run cargo build" — ALLOW through full pipeline
+    #[test]
+    fn test_governance_cargo_build_allowed() {
+        let conn = create_test_db();
+        // Step 1: Ask
+        test_cmd_ask(&conn, "Run cargo build").unwrap();
+        let intent_id = conn
+            .query_row(
+                "SELECT message_id FROM traces WHERE topic LIKE 'intents.%' ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+
+        // Verify intent type
+        let payload_json: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE message_id = ?1 AND topic LIKE 'intents.%' ORDER BY rowid DESC LIMIT 1",
+                rusqlite::params![intent_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let intent: agenticos_domain::Intent = serde_json::from_str(&payload_json).unwrap();
+        assert_eq!(intent.intent_type, "run_command");
+        assert!(intent.parameters.get("command").unwrap().contains("cargo build"));
+
+        // Step 2: Plan
+        test_cmd_plan(&conn, &intent_id).unwrap();
+        let plan_id = conn
+            .query_row(
+                "SELECT message_id FROM traces WHERE topic LIKE 'plans.%' ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        let action = get_plan_action_kind(&conn, &plan_id);
+        assert_eq!(action, "run_command");
+
+        // Step 3: Execute
+        let before = get_executor_call_count(&conn);
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        let after = get_executor_call_count(&conn);
+
+        // Verify: executor was called (noop)
+        assert_eq!(after - before, 1, "cargo build: executor should be called once");
+    }
+
+    // Scenario B: "Run rm -rf /" — DENY or VETO
+    #[test]
+    fn test_governance_rm_denied() {
+        let conn = create_test_db();
+        test_cmd_ask(&conn, "Run rm -rf /").unwrap();
+        let intent_id = conn
+            .query_row(
+                "SELECT message_id FROM traces WHERE topic LIKE 'intents.%' ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+
+        let payload_json: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE message_id = ?1 AND topic LIKE 'intents.%' ORDER BY rowid DESC LIMIT 1",
+                rusqlite::params![intent_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let intent: agenticos_domain::Intent = serde_json::from_str(&payload_json).unwrap();
+        assert_eq!(intent.intent_type, "run_command");
+        assert!(intent.parameters.get("command").unwrap().contains("rm -rf /"));
+
+        test_cmd_plan(&conn, &intent_id).unwrap();
+        let plan_id = conn
+            .query_row(
+                "SELECT message_id FROM traces WHERE topic LIKE 'plans.%' ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        let action = get_plan_action_kind(&conn, &plan_id);
+        assert_eq!(action, "run_command");
+
+        let before = get_executor_call_count(&conn);
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        let after = get_executor_call_count(&conn);
+
+        // Verify: executor was NEVER called
+        assert_eq!(after - before, 0, "rm -rf /: executor must NOT be called");
+    }
+
+    // Scenario C: "Run shutdown now" — DENY or VETO
+    #[test]
+    fn test_governance_shutdown_denied() {
+        let conn = create_test_db();
+        test_cmd_ask(&conn, "Run shutdown now").unwrap();
+        let intent_id = conn
+            .query_row(
+                "SELECT message_id FROM traces WHERE topic LIKE 'intents.%' ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+
+        let payload_json: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE message_id = ?1 AND topic LIKE 'intents.%' ORDER BY rowid DESC LIMIT 1",
+                rusqlite::params![intent_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let intent: agenticos_domain::Intent = serde_json::from_str(&payload_json).unwrap();
+        assert_eq!(intent.intent_type, "run_command");
+        assert!(intent.parameters.get("command").unwrap().contains("shutdown"));
+
+        test_cmd_plan(&conn, &intent_id).unwrap();
+        let plan_id = conn
+            .query_row(
+                "SELECT message_id FROM traces WHERE topic LIKE 'plans.%' ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+
+        let before = get_executor_call_count(&conn);
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        let after = get_executor_call_count(&conn);
+
+        // Verify: executor was NEVER called
+        assert_eq!(after - before, 0, "shutdown: executor must NOT be called");
+    }
+
+    // Test: Plans command works
+    #[test]
+    fn test_plans_command_empty_db() {
+        let conn = create_test_db();
+        assert!(cmd_plans(&conn).is_ok());
+    }
+
+    #[test]
+    fn test_plans_command_with_data() {
+        let conn = create_test_db();
+        let _plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_plans(&conn).is_ok());
+    }
+
+    // Test: Plan-show command works
+    #[test]
+    fn test_plan_show_existing() {
+        let conn = create_test_db();
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+        assert!(cmd_plan_show(&conn, &plan_id).is_ok());
+    }
+
+    #[test]
+    fn test_plan_show_nonexistent() {
+        let conn = create_test_db();
+        assert!(cmd_plan_show(&conn, "PlanId-999").is_err());
+    }
+
+    // Test: Execute-intent command works
+    #[test]
+    fn test_execute_intent_existing() {
+        let conn = create_test_db();
+        test_cmd_ask(&conn, "Open VS Code").unwrap();
+        let intent_id = conn
+            .query_row(
+                "SELECT message_id FROM traces WHERE topic LIKE 'intents.%' ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        test_cmd_plan(&conn, &intent_id).unwrap();
+        assert!(cmd_execute_intent(&conn, &intent_id).is_ok());
+    }
+
+    #[test]
+    fn test_execute_intent_nonexistent() {
+        let conn = create_test_db();
+        assert!(cmd_execute_intent(&conn, "IntentId-999").is_err());
+    }
+
+    // Test: Governance pipeline — verify execution guard assertion
+    #[test]
+    fn test_execution_guard_rm_not_executed() {
+        let conn = create_test_db();
+        test_cmd_ask(&conn, "Run rm -rf /").unwrap();
+        let intent_id = ask_and_get_id(&conn, "Run rm -rf /");
+        test_cmd_plan(&conn, &intent_id).unwrap();
+        let plan_id = conn
+            .query_row(
+                "SELECT message_id FROM traces WHERE topic LIKE 'plans.%' ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+
+        let before = get_executor_call_count(&conn);
+        assert!(cmd_execute(&conn, &plan_id).is_ok());
+        let after = get_executor_call_count(&conn);
+
+        // Execution guard: executor call count must be 0
+        assert_eq!(after - before, 0, "rm -rf /: executor must NOT be called");
+
+        // Verify the pipeline did run (execute trace exists)
+        let execute_traces: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM traces WHERE message_id = ?1 AND topic LIKE 'execute.%'",
+                rusqlite::params![plan_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(execute_traces, 1, "execute trace should exist (pipeline ran)");
+    }
+
+    // ---------------------------------------------------------------
+    // Persistence tests — verify IDs survive process restarts
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_intent_ids_persist_across_calls() {
+        // Simulate persistent storage across CLI invocations using a temp file
+        let tmp = std::env::temp_dir().join(format!("test_intents_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp); // clean start
+
+        // First CLI invocation
+        {
+            let store = agenticos_intelligence::IntentStore::new(tmp.to_str().unwrap()).unwrap();
+            let params = {
+                let mut m = std::collections::HashMap::new();
+                m.insert("application".into(), "vscode".into());
+                m
+            };
+            let intent1 = agenticos_domain::Intent::new("Open VS Code", "launch_application", params.clone(), 0.9);
+            let mut intent1 = intent1;
+            intent1.id = store.generate_id();
+            assert_eq!(intent1.id.as_str(), "IntentId-1");
+            store.insert(&intent1).unwrap();
+
+            let intent2 = agenticos_domain::Intent::new("Open Firefox", "launch_application", params.clone(), 0.85);
+            let mut intent2 = intent2;
+            intent2.id = store.generate_id();
+            assert_eq!(intent2.id.as_str(), "IntentId-2");
+            store.insert(&intent2).unwrap();
+        }
+
+        // Simulate second CLI invocation (new process)
+        {
+            let store = agenticos_intelligence::IntentStore::new(tmp.to_str().unwrap()).unwrap();
+            assert_eq!(store.len().unwrap(), 2, "persisted intents survive restart");
+
+            let params = {
+                let mut m = std::collections::HashMap::new();
+                m.insert("application".into(), "code".into());
+                m
+            };
+            let intent3 = agenticos_domain::Intent::new("Open Code", "launch_application", params, 0.9);
+            let mut intent3 = intent3;
+            intent3.id = store.generate_id();
+            // ID continues from where we left off
+            assert_eq!(intent3.id.as_str(), "IntentId-3", "IDs must persist across restarts");
+        }
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_plan_ids_persist_across_calls() {
+        let tmp = std::env::temp_dir().join(format!("test_plans_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+
+        // First CLI invocation
+        {
+            let store = agenticos_intelligence::PlanStore::new(tmp.to_str().unwrap()).unwrap();
+            let intent_id = agenticos_domain::IntentId::new();
+            let step1 = agenticos_domain::PlanStep::new(
+                1,
+                "launch_application",
+                {
+                    let mut m = std::collections::HashMap::new();
+                    m.insert("application".into(), "vscode".into());
+                    m
+                },
+            );
+            let plan1 = agenticos_domain::TaskPlan::new(intent_id.clone(), vec![step1.clone()], "pending");
+            let mut plan1 = plan1;
+            plan1.id = store.generate_id();
+            assert_eq!(plan1.id.as_str(), "PlanId-1");
+            store.insert(&plan1).unwrap();
+
+            let plan2 = agenticos_domain::TaskPlan::new(intent_id.clone(), vec![step1], "pending");
+            let mut plan2 = plan2;
+            plan2.id = store.generate_id();
+            assert_eq!(plan2.id.as_str(), "PlanId-2");
+            store.insert(&plan2).unwrap();
+        }
+
+        // Second CLI invocation
+        {
+            let store = agenticos_intelligence::PlanStore::new(tmp.to_str().unwrap()).unwrap();
+            let plan3 = agenticos_domain::TaskPlan::new(
+                agenticos_domain::IntentId::new(),
+                vec![agenticos_domain::PlanStep::new(1, "test", std::collections::HashMap::new())],
+                "pending",
+            );
+            let mut plan3 = plan3;
+            plan3.id = store.generate_id();
+            assert_eq!(plan3.id.as_str(), "PlanId-3", "Plan IDs must persist across restarts");
+        }
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_intent_plan_referential_integrity() {
+        let conn = create_test_db();
+        let intent_id = ask_and_get_id(&conn, "Open VS Code");
+        let plan_id = ask_and_plan(&conn, "Open VS Code");
+
+        // Verify plan's source_intent_id matches the intent
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM traces WHERE message_id = ?1",
+                rusqlite::params![plan_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let plan: agenticos_domain::TaskPlan = serde_json::from_str(&payload).unwrap();
+        assert_eq!(
+            plan.source_intent_id.as_str(),
+            intent_id,
+            "plan must reference the correct intent ID"
+        );
     }
 }
 

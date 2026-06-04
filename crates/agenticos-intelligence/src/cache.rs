@@ -160,12 +160,10 @@ impl<P: crate::LlmProvider> crate::LlmProvider for CachedLlmProvider<P> {
 
         if let Ok(Some(rec)) = self.cache.get(&key) {
             *self.hits.lock().unwrap() += 1;
-            return rec.with_provider(ProviderMetadata::new(
-                provider_name,
-                model_name,
-                true,
-                0,
-            ));
+            let inner_extra = rec.provider.as_ref().map(|p| p.extra.clone()).unwrap_or_default();
+            let mut hit_meta = ProviderMetadata::new(provider_name, model_name, true, 0);
+            hit_meta.extra = inner_extra;
+            return rec.with_provider(hit_meta);
         }
 
         *self.misses.lock().unwrap() += 1;
@@ -173,12 +171,11 @@ impl<P: crate::LlmProvider> crate::LlmProvider for CachedLlmProvider<P> {
         let rec = self.inner.generate_recommendation(context);
         let latency_ms = start.elapsed().as_millis() as u64;
 
-        let cached_rec = rec.with_provider(ProviderMetadata::new(
-            provider_name,
-            model_name,
-            false,
-            latency_ms,
-        ));
+        // Preserve inner provider's extra fields (e.g. debug info from GeminiProvider)
+        let inner_extra = rec.provider.as_ref().map(|p| p.extra.clone()).unwrap_or_default();
+        let mut new_meta = ProviderMetadata::new(provider_name, model_name, false, latency_ms);
+        new_meta.extra = inner_extra;
+        let cached_rec = rec.with_provider(new_meta);
 
         let _ = self.cache.put(&key, &cached_rec);
         cached_rec

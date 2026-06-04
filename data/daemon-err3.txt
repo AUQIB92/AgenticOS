@@ -1,0 +1,1 @@
+[agenticos-intelligence] configured_provider=mock selected_provider=mock model=gemini-2.5-flash api_key_present=true

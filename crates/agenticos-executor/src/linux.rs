@@ -217,6 +217,27 @@ impl LinuxCgroupExecutor {
             ActionKind::WorkloadClassifyRecommend { classification, .. } => {
                 Ok((ActionStatus::Succeeded, format!("classification: {}", classification), None))
             }
+            ActionKind::LaunchApplication { application } => {
+                Ok((ActionStatus::Succeeded, format!("linux cgroup: launch application '{}'", application), None))
+            }
+            ActionKind::OpenUrl { url } => {
+                Ok((ActionStatus::Succeeded, format!("linux cgroup: open url '{}'", url), None))
+            }
+            ActionKind::RunCommand { command, args } => {
+                Ok((ActionStatus::Succeeded, format!("linux cgroup: run command '{} {}'", command, args), None))
+            }
+            ActionKind::CreateDirectory { path } => {
+                Ok((ActionStatus::Succeeded, format!("linux cgroup: create directory '{}'", path), None))
+            }
+            ActionKind::OpenFile { path } => {
+                Ok((ActionStatus::Succeeded, format!("linux cgroup: open file '{}'", path), None))
+            }
+            ActionKind::CloneRepository { url, directory } => {
+                Ok((ActionStatus::Succeeded, format!("linux cgroup: clone repo '{}' to '{}'", url, directory), None))
+            }
+            ActionKind::CreateProjectWorkspace { project_name, framework } => {
+                Ok((ActionStatus::Succeeded, format!("linux cgroup: create project '{}' with '{}'", project_name, framework), None))
+            }
         }
     }
 }

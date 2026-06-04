@@ -7,3 +7,10 @@ policy = "policies/default.toml"
 [safety]
 privileged_execution = false
 llm_enabled = false
+
+[intelligence]
+provider = "mock"
+model = "gemini-2.5-flash"
+api_key_env = "GEMINI_API_KEY"
+timeout_seconds = 10
+classification_cooldown_seconds = 60

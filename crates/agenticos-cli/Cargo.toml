@@ -8,10 +8,17 @@ rust-version = "1.96"
 name = "agenticos"
 path = "src/main.rs"
 [dependencies]
+agenticos-agents = { path = "../agenticos-agents" }
 agenticos-bus = { path = "../agenticos-bus" }
 agenticos-domain = { path = "../agenticos-domain" }
+agenticos-executor = { path = "../agenticos-executor" }
+agenticos-intelligence = { path = "../agenticos-intelligence" }
+agenticos-policy = { path = "../agenticos-policy" }
+agenticos-safety = { path = "../agenticos-safety" }
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+dotenvy = "0.15"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 

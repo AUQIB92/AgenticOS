@@ -1,0 +1,1 @@
+[agenticos-intelligence] provider=mock model=gemini-2.5-flash

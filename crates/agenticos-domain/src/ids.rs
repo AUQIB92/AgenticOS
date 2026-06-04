@@ -46,6 +46,8 @@ id_type!(ActionId);
 id_type!(AgentId);
 id_type!(DecisionId);
 id_type!(IncidentId);
+id_type!(IntentId);
+id_type!(PlanId);
 id_type!(MessageId);
 id_type!(ObservationId);
 id_type!(ProposalId);

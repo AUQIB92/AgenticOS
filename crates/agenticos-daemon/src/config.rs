@@ -5,6 +5,8 @@ pub struct DaemonConfig {
     pub agenticos: AgenticosConfig,
     #[serde(default)]
     pub safety: SafetyConfig,
+    #[serde(default)]
+    pub intelligence: agenticos_intelligence::IntelligenceConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]

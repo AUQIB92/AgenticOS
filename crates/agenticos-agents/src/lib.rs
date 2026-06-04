@@ -1,3 +1,4 @@
+pub mod action_proposal;
 pub mod device;
 pub mod dummy;
 pub mod file;
@@ -7,6 +8,7 @@ pub mod recommendation_consumer;
 pub mod security;
 pub mod supervisor;
 
+pub use action_proposal::*;
 pub use device::*;
 pub use dummy::*;
 pub use file::*;

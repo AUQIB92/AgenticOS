@@ -3,3 +3,10 @@ mode = "development"
 event_store = "sqlite"
 db_path = "data/agenticos-dev.db"
 policy = "policies/default.toml"
+
+[intelligence]
+provider = "gemini"
+model = "gemini-2.5-flash"
+api_key_env = "GEMINI_API_KEY"
+timeout_seconds = 10
+classification_cooldown_seconds = 60

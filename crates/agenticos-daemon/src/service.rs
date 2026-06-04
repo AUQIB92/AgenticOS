@@ -55,6 +55,24 @@ impl DaemonService {
             let obs_count = observations.len();
 
             // ---------------------------------------------------------------
+            // 1b. Workload Classification (intelligence)
+            // ---------------------------------------------------------------
+            let (recommendation_count, classifications_skipped_total) = {
+                let mut classifier = ctx.classifier.lock().unwrap();
+                let rec = classifier.classify_workload(&observations);
+                let envelope = EventEnvelope::new(
+                    agenticos_domain::Topic::new(format!(
+                        "recommendations.{}",
+                        classifier.agent_id().as_str()
+                    )),
+                    trace_id.clone(),
+                    EventPayload::Recommendation(rec),
+                );
+                publish_and_trace(&ctx, envelope);
+                (classifier.classification_count(), classifier.classifications_skipped())
+            };
+
+            // ---------------------------------------------------------------
             // 2. Agent proposals
             // ---------------------------------------------------------------
             let proposals = match ctx.agent_runtime.collect_proposals(&observations) {
@@ -316,8 +334,9 @@ impl DaemonService {
             .with_executor_failed_mutations(failed_mutations as f64)
             .with_executor_rollback_count(rollback_count as f64)
             .with_executor_cpu_weight_changes(cpu_weight_changes as f64)
-            .with_executor_cpu_max_changes(cpu_max_changes as f64)
-            .with_executor_memory_max_changes(memory_max_changes as f64);
+                .with_executor_cpu_max_changes(cpu_max_changes as f64)
+                .with_executor_memory_max_changes(memory_max_changes as f64)
+                .with_classifications_skipped(classifications_skipped_total as f64);
 
             let envelope = EventEnvelope::new(
                 agenticos_domain::Topic::new("metrics.daemon"),
@@ -333,7 +352,8 @@ impl DaemonService {
                  incidents={incident_depth} vetoes={veto_count} \
                  approved={approvals} denied={denials} \
                  mutations={successful_mutations} failed_muts={failed_mutations} \
-                 rollbacks={rollback_count} \
+                 rollbacks={rollback_count} recs={recommendation_count} \
+                 skipped={classifications_skipped_total} \
                  tick={tick_duration_ms}ms decision_latency={decision_total_ms}ms \
                  exec_latency={executor_total_ms}ms"
             );

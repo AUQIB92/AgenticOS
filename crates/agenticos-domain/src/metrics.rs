@@ -263,6 +263,20 @@ impl MetricCollection {
         });
         self
     }
+
+    /// Append `classifications_skipped_total` counter.
+    pub fn with_classifications_skipped(mut self, count: f64) -> Self {
+        self.samples.push(MetricSample {
+            name: "classifications_skipped_total".into(),
+            value: MetricValue::Counter(count as u64),
+            labels: vec![MetricLabel {
+                name: "service".into(),
+                value: "intelligence".into(),
+            }],
+            timestamp: now_utc(),
+        });
+        self
+    }
 }
 
 fn now_utc() -> String {

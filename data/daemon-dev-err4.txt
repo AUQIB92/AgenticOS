@@ -1,0 +1,5 @@
+[agenticos-intelligence] configured_provider=gemini selected_provider=gemini model=gemini-2.5-flash api_key_present=true
+
+thread 'main' (11340) panicked at crates\agenticos-intelligence\src\gemini.rs:149:16:
+Cannot start a runtime from within a runtime. This happens because a function (like `block_on`) attempted to block the current thread while the thread is being used to drive asynchronous tasks.
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

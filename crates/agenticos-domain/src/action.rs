@@ -35,6 +35,14 @@ pub enum ActionKind {
     ProcessTerminateGroup { group: String },
     WorkloadClassifyRecommend { group: String, classification: String },
     ObserveOnly,
+    // ── Desktop/Productivity Actions ─────────────────────────────────
+    LaunchApplication { application: String },
+    OpenUrl { url: String },
+    RunCommand { command: String, args: String },
+    CreateDirectory { path: String },
+    OpenFile { path: String },
+    CloneRepository { url: String, directory: String },
+    CreateProjectWorkspace { project_name: String, framework: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -47,9 +55,14 @@ pub enum ActionSafetyLevel {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ActionStatus {
+    Pending,
+    Proposed,
+    Approved,
+    Denied,
+    Executing,
     Succeeded,
     Failed,
-    Denied,
+    RolledBack,
     DryRun,
 }
 

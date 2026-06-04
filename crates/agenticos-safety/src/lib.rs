@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use agenticos_domain::{Decision, Incident};
 use agenticos_policy::PolicyInput;
 
+pub mod action_validator;
 pub mod governor;
 pub mod veto;
 
@@ -10,6 +11,7 @@ pub mod veto;
 // Re-exports
 // ---------------------------------------------------------------------------
 
+pub use action_validator::SafetyActionValidator;
 pub use governor::DefaultSafetyGovernor;
 pub use veto::{VetoDecision, VetoReason};
 

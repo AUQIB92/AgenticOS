@@ -200,6 +200,13 @@ impl From<&ActionKind> for ActionKindClass {
             ActionKind::ProcessTerminateGroup { .. } => Self::ProcessTerminateGroup,
             ActionKind::WorkloadClassifyRecommend { .. } => Self::WorkloadClassifyRecommend,
             ActionKind::ObserveOnly => Self::ObserveOnly,
+            ActionKind::LaunchApplication { .. } => Self::ObserveOnly,
+            ActionKind::OpenUrl { .. } => Self::ObserveOnly,
+            ActionKind::RunCommand { .. } => Self::ObserveOnly,
+            ActionKind::CreateDirectory { .. } => Self::ObserveOnly,
+            ActionKind::OpenFile { .. } => Self::ObserveOnly,
+            ActionKind::CloneRepository { .. } => Self::ObserveOnly,
+            ActionKind::CreateProjectWorkspace { .. } => Self::ObserveOnly,
         }
     }
 }
